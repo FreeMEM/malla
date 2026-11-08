@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="fondo" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#33d17a"/>
+      <stop offset="1" stop-color="#0f7a5c"/>
+    </linearGradient>
+    <radialGradient id="brillo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffe680"/>
+      <stop offset="1" stop-color="#f5c211"/>
+    </radialGradient>
+  </defs>
+  <!-- base con sombra inferior -->
+  <rect x="8" y="12" width="112" height="108" rx="26" fill="#0a5240"/>
+  <rect x="8" y="8" width="112" height="108" rx="26" fill="url(#fondo)"/>
+  <!-- ondas de radio del nodo central -->
+  <g fill="none" stroke="#ffffff" stroke-linecap="round" opacity="0.35" stroke-width="4">
+    <circle cx="64" cy="64" r="22"/>
+    <circle cx="64" cy="64" r="34"/>
+  </g>
+  <!-- enlaces de la malla -->
+  <g stroke="#ffffff" stroke-width="4.5" stroke-linecap="round" opacity="0.9">
+    <line x1="32" y1="36" x2="64" y2="64"/>
+    <line x1="96" y1="32" x2="64" y2="64"/>
+    <line x1="30" y1="92" x2="64" y2="64"/>
+    <line x1="98" y1="94" x2="64" y2="64"/>
+    <line x1="32" y1="36" x2="96" y2="32"/>
+    <line x1="96" y1="32" x2="98" y2="94"/>
+    <line x1="30" y1="92" x2="98" y2="94"/>
+  </g>
+  <!-- nodos -->
+  <g fill="#ffffff">
+    <circle cx="32" cy="36" r="9"/>
+    <circle cx="96" cy="32" r="9"/>
+    <circle cx="30" cy="92" r="9"/>
+    <circle cx="98" cy="94" r="9"/>
+  </g>
+  <circle cx="64" cy="64" r="13" fill="#ffffff"/>
+  <circle cx="64" cy="64" r="9" fill="url(#brillo)"/>
+</svg>

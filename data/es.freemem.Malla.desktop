@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Malla
+GenericName=Cliente Meshtastic
+Comment=Mensajes, nodos y mapa de la red LoRa Meshtastic
+Exec=malla
+Icon=es.freemem.Malla
+Terminal=false
+Categories=Network;Chat;
+Keywords=meshtastic;lora;mesh;radio;
+StartupNotify=true
+StartupWMClass=es.freemem.Malla

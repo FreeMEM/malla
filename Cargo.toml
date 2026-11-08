@@ -1,0 +1,43 @@
+[package]
+name = "malla"
+version = "0.1.0"
+edition = "2021"
+description = "Cliente de escritorio Meshtastic para Linux (GTK4 + libadwaita)"
+license = "GPL-3.0-only"
+authors = ["FreeMEM <devel@freemem.space>"]
+repository = "https://github.com/FreeMEM/malla"
+homepage = "https://github.com/FreeMEM/malla"
+readme = "README.md"
+keywords = ["meshtastic", "lora", "mesh", "gtk4", "libadwaita"]
+categories = ["network-programming", "gui"]
+
+[dependencies]
+meshtastic = { version = "0.1.9", features = ["bluetooth-le"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+shumate = { package = "libshumate", version = "0.8", features = ["v1_1"] }
+async-channel = "2"
+ksni = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+
+[package.metadata.deb]
+maintainer = "FreeMEM <devel@freemem.space>"
+copyright = "2026, FreeMEM <devel@freemem.space>"
+license-file = ["LICENSE", "0"]
+section = "net"
+priority = "optional"
+depends = "$auto"
+extended-description = """\
+Cliente de escritorio para la red LoRa Meshtastic. Conecta con el nodo por \
+Bluetooth, USB o WiFi. Mensajes por canal y directos, lista de nodos y mapa."""
+assets = [
+    ["target/release/malla", "usr/bin/", "755"],
+    ["data/es.freemem.Malla.desktop", "usr/share/applications/", "644"],
+    ["data/es.freemem.Malla.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["README.md", "usr/share/doc/malla/README.md", "644"],
+]

@@ -1,0 +1,33 @@
+# Maintainer: FreeMEM <devel@freemem.space>
+pkgname=malla
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Cliente de escritorio para la red LoRa Meshtastic (GTK4 + libadwaita)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/FreeMEM/malla"
+license=('GPL-3.0-only')
+depends=('gtk4' 'libadwaita' 'libshumate' 'dbus' 'glib2' 'cairo' 'pango' 'gdk-pixbuf2' 'graphene' 'glibc' 'gcc-libs')
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 target/release/malla "$pkgdir/usr/bin/malla"
+    install -Dm644 data/es.freemem.Malla.desktop "$pkgdir/usr/share/applications/es.freemem.Malla.desktop"
+    install -Dm644 data/es.freemem.Malla.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/es.freemem.Malla.svg"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
