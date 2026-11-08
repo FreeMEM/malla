@@ -123,8 +123,9 @@ como Telegram o Spotify. Un punto rojo indica mensajes sin leer.
 
 ## Lo que falta
 
-- Probar con hardware real todo lo nuevo de la versión 0.2. Las capturas son del
-  modo demo. La versión 0.1 sí se probó con un Heltec V3 por Bluetooth.
+- Probar a fondo los ajustes del nodo con hardware real. La versión 0.2 se ha usado
+  con un Heltec V3 por Bluetooth, pero no se han guardado todas las secciones de
+  configuración en un nodo de verdad.
 - Mapa sin conexión (guardar teselas).
 - Administrar otros nodos a distancia.
 - Pedir al nodo los mensajes guardados (cliente de "guardar y reenviar").
@@ -134,6 +135,8 @@ como Telegram o Spotify. Un punto rojo indica mensajes sin leer.
 - Verificación de claves entre nodos.
 - Otros idiomas. La interfaz solo está en español.
 - Flatpak.
+
+Los cambios de cada versión están en el [historial](CHANGELOG.md).
 
 Si encuentras un fallo, cuéntalo en una [incidencia](https://github.com/FreeMEM/malla/issues).
 
@@ -149,7 +152,7 @@ Descarga el `.deb` de la [última versión](https://github.com/FreeMEM/malla/rel
 
 Paquete ya compilado, de la [última versión](https://github.com/FreeMEM/malla/releases/latest):
 
-    sudo pacman -U https://github.com/FreeMEM/malla/releases/download/v0.1.0/malla-0.1.0-1-x86_64.pkg.tar.zst
+    sudo pacman -U https://github.com/FreeMEM/malla/releases/download/v0.2.0/malla-0.2.0-1-x86_64.pkg.tar.zst
 
 O compilándolo tú con el PKGBUILD:
 
