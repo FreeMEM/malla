@@ -1,6 +1,6 @@
 # Maintainer: FreeMEM <devel@freemem.space>
 pkgname=malla
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Cliente de escritorio para la red LoRa Meshtastic (GTK4 + libadwaita)"
 arch=('x86_64' 'aarch64')

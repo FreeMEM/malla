@@ -1,6 +1,6 @@
 [package]
 name = "malla"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Cliente de escritorio Meshtastic para Linux (GTK4 + libadwaita)"
 license = "GPL-3.0-only"
@@ -20,7 +20,10 @@ shumate = { package = "libshumate", version = "0.8", features = ["v1_1"] }
 async-channel = "2"
 ksni = "0.3"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+strum = "0.28"
+qrcode = { version = "0.14", default-features = false }
+base64 = "0.22"
 
 [profile.release]
 lto = "thin"

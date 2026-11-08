@@ -6,13 +6,14 @@ use std::time::Duration;
 use meshtastic::api::{ConnectedStreamApi, StreamApi};
 use meshtastic::packet::{PacketDestination, PacketReceiver, PacketRouter};
 use meshtastic::protobufs::{
-    self, from_radio, mesh_packet, routing, telemetry, FromRadio, MeshPacket, PortNum,
+    self, admin_message, from_radio, mesh_packet, routing, telemetry, FromRadio, MeshPacket, PortNum,
 };
 use meshtastic::types::{MeshChannel, NodeId};
 use meshtastic::utils;
 use meshtastic::utils::stream::BleId;
 use meshtastic::Message as _;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 use crate::model::*;
 
@@ -54,11 +55,7 @@ impl PacketRouter<(), Infallible> for Router {
     fn handle_mesh_packet(&mut self, p: MeshPacket) -> Result<(), Infallible> {
         if let Some(mesh_packet::PayloadVariant::Decoded(d)) = &p.payload_variant {
             if d.portnum == PortNum::TextMessageApp as i32 {
-                let conv = if p.to == BROADCAST {
-                    Conv::Channel(p.channel)
-                } else {
-                    Conv::Direct(p.to)
-                };
+                let conv = if p.to == BROADCAST { Conv::Channel(p.channel) } else { Conv::Direct(p.to) };
                 emit(
                     &self.ui,
                     Event::Message(Msg {
@@ -72,6 +69,8 @@ impl PacketRouter<(), Infallible> for Router {
                         snr: None,
                         rssi: None,
                         hops: None,
+                        reply_id: (d.reply_id != 0).then_some(d.reply_id),
+                        emoji: d.emoji != 0,
                     }),
                 );
             }
@@ -92,99 +91,437 @@ struct Conn {
 enum Step {
     Cmd(Option<Command>),
     Pkt(Option<FromRadio>),
+    Retry,
+}
+
+struct Radio {
+    conn: Option<Conn>,
+    router: Router,
+    ui: Ui,
+    /// Conexión que el usuario quiere mantener (para reconectar sola).
+    wanted: Option<Target>,
+    retry_at: Option<Instant>,
+    retries: u32,
+    my_user: Option<protobufs::User>,
 }
 
 async fn run(mut cmds: mpsc::UnboundedReceiver<Command>, ui: Ui) {
-    let mut conn: Option<Conn> = None;
-    let mut router = Router { my: 0, ui: ui.clone() };
+    let mut r = Radio {
+        conn: None,
+        router: Router { my: 0, ui: ui.clone() },
+        ui,
+        wanted: None,
+        retry_at: None,
+        retries: 0,
+        my_user: None,
+    };
 
     loop {
-        let step = match conn.as_mut() {
+        let retry_at = r.retry_at;
+        let step = match r.conn.as_mut() {
             Some(c) => tokio::select! {
                 cmd = cmds.recv() => Step::Cmd(cmd),
                 pkt = c.rx.recv() => Step::Pkt(pkt),
             },
-            None => Step::Cmd(cmds.recv().await),
+            None => match retry_at {
+                Some(at) => tokio::select! {
+                    cmd = cmds.recv() => Step::Cmd(cmd),
+                    _ = tokio::time::sleep_until(at) => Step::Retry,
+                },
+                None => Step::Cmd(cmds.recv().await),
+            },
         };
 
         match step {
             Step::Cmd(None) => break,
-            Step::Cmd(Some(cmd)) => handle_cmd(cmd, &mut conn, &mut router, &ui).await,
-            Step::Pkt(Some(p)) => handle_from_radio(p, &mut router, &ui),
+            Step::Cmd(Some(cmd)) => r.handle_cmd(cmd).await,
+            Step::Pkt(Some(p)) => r.handle_from_radio(p),
             Step::Pkt(None) => {
-                conn = None;
-                emit(&ui, Event::Disconnected(Some("Se perdió la conexión con el nodo".into())));
+                r.conn = None;
+                r.schedule_retry("Se perdió la conexión con el nodo".into());
+            }
+            Step::Retry => {
+                r.retry_at = None;
+                if let Some(t) = r.wanted.clone() {
+                    r.connect(t).await;
+                }
             }
         }
     }
 
-    if let Some(c) = conn {
+    if let Some(c) = r.conn {
         let _ = c.api.disconnect().await;
     }
 }
 
-async fn handle_cmd(cmd: Command, conn: &mut Option<Conn>, router: &mut Router, ui: &Ui) {
-    match cmd {
-        Command::ScanBle => {
-            let ui = ui.clone();
-            tokio::spawn(async move {
-                let res = utils::stream::available_ble_devices(Duration::from_secs(6))
-                    .await
-                    .map(|v| {
-                        v.into_iter()
-                            .map(|d| {
-                                (
-                                    d.name.unwrap_or_else(|| "(sin nombre)".into()),
-                                    d.mac_address.to_string(),
-                                )
-                            })
-                            .collect()
-                    })
-                    .map_err(|e| e.to_string());
-                emit(&ui, Event::BleDevices(res));
-            });
-        }
-        Command::Connect(target) => {
-            if let Some(c) = conn.take() {
-                let _ = c.api.disconnect().await;
+impl Radio {
+    fn schedule_retry(&mut self, reason: String) {
+        match self.wanted.clone() {
+            Some(target) => {
+                self.retries += 1;
+                let secs = (5 * self.retries as u64).min(30);
+                self.retry_at = Some(Instant::now() + Duration::from_secs(secs));
+                emit(&self.ui, Event::Reconnecting { target, secs, reason });
             }
-            router.my = 0;
-            emit(ui, Event::Connecting(target.clone()));
-            match tokio::time::timeout(Duration::from_secs(40), open(&target)).await {
-                Ok(Ok(c)) => {
-                    *conn = Some(c);
-                    emit(ui, Event::Connected(target));
+            None => emit(&self.ui, Event::Disconnected(Some(reason))),
+        }
+    }
+
+    async fn connect(&mut self, target: Target) {
+        if let Some(c) = self.conn.take() {
+            let _ = c.api.disconnect().await;
+        }
+        self.router.my = 0;
+        emit(&self.ui, Event::Connecting(target.clone()));
+        match tokio::time::timeout(Duration::from_secs(40), open(&target)).await {
+            Ok(Ok(c)) => {
+                self.conn = Some(c);
+                self.retries = 0;
+                self.retry_at = None;
+                emit(&self.ui, Event::Connected(target));
+            }
+            Ok(Err(e)) => self.schedule_retry(e),
+            Err(_) => self.schedule_retry("El nodo no respondió a tiempo".into()),
+        }
+    }
+
+    async fn handle_cmd(&mut self, cmd: Command) {
+        match cmd {
+            Command::ScanBle => {
+                let ui = self.ui.clone();
+                tokio::spawn(async move {
+                    let res = utils::stream::available_ble_devices(Duration::from_secs(6))
+                        .await
+                        .map(|v| {
+                            v.into_iter()
+                                .map(|d| (d.name.unwrap_or_else(|| "(sin nombre)".into()), d.mac_address.to_string()))
+                                .collect()
+                        })
+                        .map_err(|e| e.to_string());
+                    emit(&ui, Event::BleDevices(res));
+                });
+            }
+            Command::Connect(target) => {
+                self.wanted = Some(target.clone());
+                self.retries = 0;
+                self.retry_at = None;
+                self.connect(target).await;
+            }
+            Command::Disconnect => {
+                self.wanted = None;
+                self.retry_at = None;
+                if let Some(c) = self.conn.take() {
+                    let _ = c.api.disconnect().await;
                 }
-                Ok(Err(e)) => emit(ui, Event::Disconnected(Some(e))),
-                Err(_) => emit(
-                    ui,
-                    Event::Disconnected(Some("El nodo no respondió a tiempo".into())),
-                ),
+                emit(&self.ui, Event::Disconnected(None));
+            }
+            Command::SendText { conv, text, reply_id, emoji } => {
+                let (dest, ch) = dest_of(conv);
+                let data = text.into_bytes();
+                self.send(data, PortNum::TextMessageApp, dest, ch, true, false, true, reply_id, emoji.then_some(1))
+                    .await;
+            }
+            Command::Traceroute(n) => {
+                let data = protobufs::RouteDiscovery::default().encode_to_vec();
+                if self
+                    .send(data, PortNum::TracerouteApp, PacketDestination::Node(NodeId::new(n)), 0, false, true, false, None, None)
+                    .await
+                {
+                    emit(&self.ui, Event::Info("Traceroute enviado. La respuesta puede tardar un minuto.".into()));
+                }
+            }
+            Command::RequestPosition(n) => {
+                let data = protobufs::Position { time: now(), ..Default::default() }.encode_to_vec();
+                if self
+                    .send(data, PortNum::PositionApp, PacketDestination::Node(NodeId::new(n)), 0, false, true, false, None, None)
+                    .await
+                {
+                    emit(&self.ui, Event::Info("Posición pedida.".into()));
+                }
+            }
+            Command::RequestUser(n) => {
+                let Some(u) = self.my_user.clone() else {
+                    emit(&self.ui, Event::Error("Aún no conozco los datos de tu nodo".into()));
+                    return;
+                };
+                if self
+                    .send(u.encode_to_vec(), PortNum::NodeinfoApp, PacketDestination::Node(NodeId::new(n)), 0, false, true, false, None, None)
+                    .await
+                {
+                    emit(&self.ui, Event::Info("Datos de usuario intercambiados.".into()));
+                }
+            }
+            Command::SendWaypoint(w) => {
+                self.send(w.encode_to_vec(), PortNum::WaypointApp, PacketDestination::Broadcast, 0, false, false, false, None, None)
+                    .await;
+            }
+            Command::Admin(list) => self.admin(list).await,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn send(
+        &mut self,
+        data: Vec<u8>,
+        port: PortNum,
+        dest: PacketDestination,
+        ch: u32,
+        want_ack: bool,
+        want_response: bool,
+        echo: bool,
+        reply_id: Option<u32>,
+        emoji: Option<u32>,
+    ) -> bool {
+        let Some(c) = self.conn.as_mut() else {
+            emit(&self.ui, Event::Error("No hay conexión con el nodo".into()));
+            return false;
+        };
+        match c
+            .api
+            .send_mesh_packet(
+                &mut self.router,
+                data.into(),
+                port,
+                dest,
+                MeshChannel::from(ch),
+                want_ack,
+                want_response,
+                echo,
+                reply_id,
+                emoji,
+            )
+            .await
+        {
+            Ok(()) => true,
+            Err(e) => {
+                emit(&self.ui, Event::Error(format!("No se pudo enviar: {e}")));
+                false
             }
         }
-        Command::Disconnect => {
-            if let Some(c) = conn.take() {
-                let _ = c.api.disconnect().await;
-            }
-            emit(ui, Event::Disconnected(None));
+    }
+
+    async fn admin(&mut self, list: Vec<admin_message::PayloadVariant>) {
+        use admin_message::PayloadVariant as P;
+        let edits = list.iter().any(|p| {
+            matches!(p, P::SetConfig(_) | P::SetModuleConfig(_) | P::SetChannel(_) | P::SetOwner(_) | P::SetFixedPosition(_))
+        });
+        let mut all = vec![];
+        if edits {
+            all.push(P::BeginEditSettings(true));
         }
-        Command::SendText { conv, text } => {
-            let Some(c) = conn.as_mut() else {
-                emit(ui, Event::Error("No hay conexión con el nodo".into()));
-                return;
-            };
-            let (dest, ch) = match conv {
-                Conv::Channel(ch) => (PacketDestination::Broadcast, ch),
-                Conv::Direct(n) => (PacketDestination::Node(NodeId::new(n)), 0),
-            };
-            if let Err(e) = c
-                .api
-                .send_text(router, text, dest, true, MeshChannel::from(ch))
+        all.extend(list);
+        if edits {
+            all.push(P::CommitEditSettings(true));
+        }
+        for p in all {
+            let msg = protobufs::AdminMessage { payload_variant: Some(p), session_passkey: vec![] };
+            if !self
+                .send(msg.encode_to_vec(), PortNum::AdminApp, PacketDestination::Local, 0, true, false, false, None, None)
                 .await
             {
-                emit(ui, Event::Error(format!("No se pudo enviar: {e}")));
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        if edits {
+            emit(&self.ui, Event::Info("Cambios enviados al nodo. Puede que se reinicie.".into()));
+        }
+    }
+
+    fn handle_from_radio(&mut self, fr: FromRadio) {
+        let Some(v) = fr.payload_variant else { return };
+        let ui = &self.ui;
+        match v {
+            from_radio::PayloadVariant::MyInfo(m) => {
+                self.router.my = m.my_node_num;
+                emit(ui, Event::MyNode(m.my_node_num));
+            }
+            from_radio::PayloadVariant::NodeInfo(n) => {
+                if n.num == self.router.my {
+                    if let Some(u) = &n.user {
+                        self.my_user = Some(u.clone());
+                        emit(ui, Event::MyUser(u.clone()));
+                    }
+                }
+                emit(ui, Event::Node(node_from_info(n)));
+            }
+            from_radio::PayloadVariant::Channel(c) => {
+                if c.role != 0 {
+                    emit(
+                        ui,
+                        Event::Channel(ChannelInfo {
+                            index: c.index as u32,
+                            name: c.settings.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
+                            role: c.role,
+                        }),
+                    );
+                }
+                emit(ui, Event::ChannelFull(c));
+            }
+            from_radio::PayloadVariant::Config(c) => emit(ui, Event::Config(c)),
+            from_radio::PayloadVariant::ModuleConfig(c) => emit(ui, Event::ModuleConfig(c)),
+            from_radio::PayloadVariant::Metadata(m) => emit(ui, Event::Metadata(m)),
+            from_radio::PayloadVariant::ConfigCompleteId(_) => emit(ui, Event::ConfigComplete),
+            from_radio::PayloadVariant::Rebooted(_) => emit(ui, Event::Info("El nodo se ha reiniciado".into())),
+            from_radio::PayloadVariant::Packet(p) => self.handle_mesh(p),
+            _ => {}
+        }
+    }
+
+    fn handle_mesh(&mut self, p: MeshPacket) {
+        let my = self.router.my;
+        let ui = &self.ui;
+        let mut patch = NodePatch {
+            heard_at: Some(if p.rx_time > 0 { p.rx_time } else { now() }),
+            snr: (p.rx_snr != 0.0).then_some(p.rx_snr),
+            rssi: (p.rx_rssi != 0).then_some(p.rx_rssi),
+            hops: (p.hop_start > 0).then(|| p.hop_start.saturating_sub(p.hop_limit)),
+            via_mqtt: Some(p.via_mqtt),
+            ..Default::default()
+        };
+        let mut log = PacketLog {
+            time: patch.heard_at.unwrap_or(0),
+            from: p.from,
+            to: p.to,
+            port: "cifrado".into(),
+            channel: p.channel,
+            snr: patch.snr,
+            rssi: patch.rssi,
+            hops: patch.hops,
+            size: 0,
+            encrypted: true,
+            via_mqtt: p.via_mqtt,
+            summary: String::new(),
+        };
+
+        if let Some(mesh_packet::PayloadVariant::Decoded(d)) = &p.payload_variant {
+            log.encrypted = false;
+            log.size = d.payload.len();
+            let port = PortNum::try_from(d.portnum);
+            log.port = port.map(|p| p.as_str_name().to_string()).unwrap_or_else(|_| format!("puerto {}", d.portnum));
+            match port {
+                Ok(PortNum::TextMessageApp) if p.from != my => {
+                    let conv = if p.to == my && p.to != BROADCAST { Conv::Direct(p.from) } else { Conv::Channel(p.channel) };
+                    let text = String::from_utf8_lossy(&d.payload).into_owned();
+                    log.summary = text.chars().take(60).collect();
+                    emit(
+                        ui,
+                        Event::Message(Msg {
+                            id: p.id,
+                            conv,
+                            from: p.from,
+                            text,
+                            time: if p.rx_time > 0 { p.rx_time } else { now() },
+                            delivery: Delivery::Incoming,
+                            error: None,
+                            snr: patch.snr,
+                            rssi: patch.rssi,
+                            hops: patch.hops,
+                            reply_id: (d.reply_id != 0).then_some(d.reply_id),
+                            emoji: d.emoji != 0,
+                        }),
+                    );
+                }
+                Ok(PortNum::NodeinfoApp) => {
+                    if let Ok(u) = protobufs::User::decode(d.payload.as_slice()) {
+                        log.summary = format!("{} ({})", u.long_name, u.short_name);
+                        patch.user = Some(u);
+                    }
+                }
+                Ok(PortNum::PositionApp) => {
+                    if let Ok(pos) = protobufs::Position::decode(d.payload.as_slice()) {
+                        if let (Some(la), Some(lo)) = (pos.latitude_i, pos.longitude_i) {
+                            if la != 0 || lo != 0 {
+                                let (la, lo) = (la as f64 * 1e-7, lo as f64 * 1e-7);
+                                log.summary = format!("{la:.5}, {lo:.5}");
+                                patch.position = Some((la, lo, pos.altitude));
+                            }
+                        }
+                    }
+                }
+                Ok(PortNum::TelemetryApp) => {
+                    if let Ok(t) = protobufs::Telemetry::decode(d.payload.as_slice()) {
+                        match t.variant {
+                            Some(telemetry::Variant::DeviceMetrics(m)) => {
+                                patch.battery = m.battery_level;
+                                patch.voltage = m.voltage;
+                                patch.channel_util = m.channel_utilization;
+                                patch.air_util_tx = m.air_util_tx;
+                                patch.uptime = m.uptime_seconds;
+                                log.summary = "métricas del aparato".into();
+                            }
+                            Some(telemetry::Variant::EnvironmentMetrics(m)) => {
+                                patch.temperature = m.temperature;
+                                patch.humidity = m.relative_humidity;
+                                patch.pressure = m.barometric_pressure;
+                                log.summary = "entorno".into();
+                            }
+                            Some(_) => log.summary = "otra telemetría".into(),
+                            None => {}
+                        }
+                    }
+                }
+                Ok(PortNum::RoutingApp) if d.request_id != 0 => {
+                    if let Ok(r) = protobufs::Routing::decode(d.payload.as_slice()) {
+                        if let Some(routing::Variant::ErrorReason(code)) = r.variant {
+                            log.summary = if code == 0 { "confirmación".into() } else { routing_error(code) };
+                            emit(ui, Event::Delivery { id: d.request_id, ok: code == 0, error: (code != 0).then(|| routing_error(code)) });
+                        }
+                    }
+                }
+                Ok(PortNum::TracerouteApp) if p.to == my && d.request_id != 0 => {
+                    if let Ok(rd) = protobufs::RouteDiscovery::decode(d.payload.as_slice()) {
+                        let snr = |v: &Vec<i32>| v.iter().map(|s| (*s != i8::MIN as i32).then(|| *s as f32 / 4.0)).collect();
+                        log.summary = format!("ruta de {} saltos", rd.route.len() + 1);
+                        emit(
+                            ui,
+                            Event::Trace(Trace {
+                                target: p.from,
+                                time: now(),
+                                towards: rd.route.clone(),
+                                snr_towards: snr(&rd.snr_towards),
+                                back: rd.route_back.clone(),
+                                snr_back: snr(&rd.snr_back),
+                                has_back: !rd.snr_back.is_empty(),
+                            }),
+                        );
+                    }
+                }
+                Ok(PortNum::WaypointApp) => {
+                    if let Ok(w) = protobufs::Waypoint::decode(d.payload.as_slice()) {
+                        log.summary = w.name.clone();
+                        emit(
+                            ui,
+                            Event::Waypoint(Waypoint {
+                                id: w.id,
+                                lat: w.latitude_i.unwrap_or(0) as f64 * 1e-7,
+                                lon: w.longitude_i.unwrap_or(0) as f64 * 1e-7,
+                                name: w.name,
+                                description: w.description,
+                                icon: w.icon,
+                                expire: w.expire,
+                                locked_to: w.locked_to,
+                                from: p.from,
+                                time: now(),
+                            }),
+                        );
+                    }
+                }
+                _ => {}
             }
         }
+
+        emit(ui, Event::Packet(log));
+        if p.from != 0 {
+            emit(ui, Event::NodePatch(p.from, patch));
+        }
+    }
+}
+
+fn dest_of(conv: Conv) -> (PacketDestination, u32) {
+    match conv {
+        Conv::Channel(ch) => (PacketDestination::Broadcast, ch),
+        Conv::Direct(n) => (PacketDestination::Node(NodeId::new(n)), 0),
     }
 }
 
@@ -199,141 +536,17 @@ async fn open(target: &Target) -> Result<Conn, String> {
             api.connect(s).await
         }
         Target::Serial { port } => {
-            let s = utils::stream::build_serial_stream(port.clone(), None, None, None)
-                .map_err(|e| format!("USB: {e}"))?;
+            let s = utils::stream::build_serial_stream(port.clone(), None, None, None).map_err(|e| format!("USB: {e}"))?;
             api.connect(s).await
         }
         Target::Tcp { addr } => {
-            let addr = if addr.contains(':') {
-                addr.clone()
-            } else {
-                format!("{addr}:4403")
-            };
-            let s = utils::stream::build_tcp_stream(addr)
-                .await
-                .map_err(|e| format!("Red: {e}"))?;
+            let addr = if addr.contains(':') { addr.clone() } else { format!("{addr}:4403") };
+            let s = utils::stream::build_tcp_stream(addr).await.map_err(|e| format!("Red: {e}"))?;
             api.connect(s).await
         }
     };
-    let api = api
-        .configure(utils::generate_rand_id())
-        .await
-        .map_err(|e| e.to_string())?;
+    let api = api.configure(utils::generate_rand_id()).await.map_err(|e| e.to_string())?;
     Ok(Conn { api, rx })
-}
-
-fn handle_from_radio(fr: FromRadio, router: &mut Router, ui: &Ui) {
-    let Some(v) = fr.payload_variant else { return };
-    match v {
-        from_radio::PayloadVariant::MyInfo(m) => {
-            router.my = m.my_node_num;
-            emit(ui, Event::MyNode(m.my_node_num));
-        }
-        from_radio::PayloadVariant::NodeInfo(n) => emit(ui, Event::Node(node_from_info(n))),
-        from_radio::PayloadVariant::Channel(c) => {
-            if c.role != 0 {
-                emit(
-                    ui,
-                    Event::Channel(ChannelInfo {
-                        index: c.index as u32,
-                        name: c.settings.map(|s| s.name).unwrap_or_default(),
-                        role: c.role,
-                    }),
-                );
-            }
-        }
-        from_radio::PayloadVariant::ConfigCompleteId(_) => emit(ui, Event::ConfigComplete),
-        from_radio::PayloadVariant::Packet(p) => handle_mesh(p, router.my, ui),
-        _ => {}
-    }
-}
-
-fn handle_mesh(p: MeshPacket, my: u32, ui: &Ui) {
-    let mut patch = NodePatch {
-        heard_at: Some(if p.rx_time > 0 { p.rx_time } else { now() }),
-        snr: (p.rx_snr != 0.0).then_some(p.rx_snr),
-        rssi: (p.rx_rssi != 0).then_some(p.rx_rssi),
-        hops: (p.hop_start > 0).then(|| p.hop_start.saturating_sub(p.hop_limit)),
-        ..Default::default()
-    };
-
-    if let Some(mesh_packet::PayloadVariant::Decoded(d)) = &p.payload_variant {
-        match PortNum::try_from(d.portnum) {
-            Ok(PortNum::TextMessageApp) if p.from != my => {
-                let conv = if p.to == my && p.to != BROADCAST {
-                    Conv::Direct(p.from)
-                } else {
-                    Conv::Channel(p.channel)
-                };
-                emit(
-                    ui,
-                    Event::Message(Msg {
-                        id: p.id,
-                        conv,
-                        from: p.from,
-                        text: String::from_utf8_lossy(&d.payload).into_owned(),
-                        time: if p.rx_time > 0 { p.rx_time } else { now() },
-                        delivery: Delivery::Incoming,
-                        error: None,
-                        snr: patch.snr,
-                        rssi: patch.rssi,
-                        hops: patch.hops,
-                    }),
-                );
-            }
-            Ok(PortNum::NodeinfoApp) => {
-                if let Ok(u) = protobufs::User::decode(d.payload.as_slice()) {
-                    patch.user = Some((
-                        u.long_name,
-                        u.short_name,
-                        hw_name(u.hw_model),
-                        role_name(u.role),
-                        !u.public_key.is_empty(),
-                    ));
-                }
-            }
-            Ok(PortNum::PositionApp) => {
-                if let Ok(pos) = protobufs::Position::decode(d.payload.as_slice()) {
-                    if let (Some(la), Some(lo)) = (pos.latitude_i, pos.longitude_i) {
-                        if la != 0 || lo != 0 {
-                            patch.position =
-                                Some((la as f64 * 1e-7, lo as f64 * 1e-7, pos.altitude));
-                        }
-                    }
-                }
-            }
-            Ok(PortNum::TelemetryApp) => {
-                if let Ok(t) = protobufs::Telemetry::decode(d.payload.as_slice()) {
-                    if let Some(telemetry::Variant::DeviceMetrics(m)) = t.variant {
-                        patch.battery = m.battery_level;
-                        patch.voltage = m.voltage;
-                        patch.channel_util = m.channel_utilization;
-                        patch.air_util_tx = m.air_util_tx;
-                        patch.uptime = m.uptime_seconds;
-                    }
-                }
-            }
-            Ok(PortNum::RoutingApp) if d.request_id != 0 => {
-                if let Ok(r) = protobufs::Routing::decode(d.payload.as_slice()) {
-                    if let Some(routing::Variant::ErrorReason(code)) = r.variant {
-                        emit(
-                            ui,
-                            Event::Delivery {
-                                id: d.request_id,
-                                ok: code == 0,
-                                error: (code != 0).then(|| routing_error(code)),
-                            },
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if p.from != 0 {
-        emit(ui, Event::NodePatch(p.from, patch));
-    }
 }
 
 fn node_from_info(n: protobufs::NodeInfo) -> Node {
@@ -344,6 +557,7 @@ fn node_from_info(n: protobufs::NodeInfo) -> Node {
         hops_away: n.hops_away,
         via_mqtt: n.via_mqtt,
         favorite: n.is_favorite,
+        ignored: n.is_ignored,
         ..Default::default()
     };
     if let Some(u) = n.user {
@@ -352,6 +566,7 @@ fn node_from_info(n: protobufs::NodeInfo) -> Node {
         node.hw_model = hw_name(u.hw_model);
         node.role = role_name(u.role);
         node.has_pubkey = !u.public_key.is_empty();
+        node.licensed = u.is_licensed;
     }
     if let Some(m) = n.device_metrics {
         node.battery = m.battery_level;
@@ -372,18 +587,6 @@ fn node_from_info(n: protobufs::NodeInfo) -> Node {
     node
 }
 
-fn hw_name(v: i32) -> String {
-    protobufs::HardwareModel::try_from(v)
-        .map(|h| h.as_str_name().to_string())
-        .unwrap_or_else(|_| format!("modelo {v}"))
-}
-
-fn role_name(v: i32) -> String {
-    protobufs::config::device_config::Role::try_from(v)
-        .map(|r| r.as_str_name().to_string())
-        .unwrap_or_default()
-}
-
 fn routing_error(code: i32) -> String {
     use routing::Error as E;
     match E::try_from(code) {
@@ -392,8 +595,10 @@ fn routing_error(code: i32) -> String {
         Ok(E::Timeout) => "Tiempo agotado".into(),
         Ok(E::TooLarge) => "Mensaje demasiado largo".into(),
         Ok(E::NoChannel) => "Canal no válido".into(),
+        Ok(E::NoResponse) => "El destino no respondió".into(),
         Ok(E::DutyCycleLimit) => "Límite legal de uso del aire alcanzado; espera un poco".into(),
-        Ok(E::PkiFailed) | Ok(E::PkiUnknownPubkey) => {
+        Ok(E::RateLimitExceeded) => "Demasiados mensajes seguidos; espera un poco".into(),
+        Ok(E::PkiFailed) | Ok(E::PkiUnknownPubkey) | Ok(E::PkiSendFailPublicKey) => {
             "Fallo de cifrado directo (falta la clave del destino)".into()
         }
         Ok(e) => e.as_str_name().to_string(),

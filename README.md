@@ -22,21 +22,42 @@ Las secciones siguen las del [cliente web oficial](https://github.com/meshtastic
 
 ## Capturas
 
-**Mensajes.** Canales y chats directos, con el estado de cada mensaje enviado.
+**Mensajes.** Canales y chats directos. Respuestas, reacciones con emoji,
+respuestas rápidas y estado de entrega de cada mensaje.
 
 ![Mensajes](capturas/mensajes.png)
 
-**Nodos.** Todos los nodos que conoce tu radio, con señal, saltos y batería.
+**Nodos.** Ordenar por último contacto, distancia, nombre, señal o saltos. Filtros,
+distancia y rumbo desde tu nodo, y un menú con todas las acciones.
 
 ![Nodos](capturas/nodos.png)
 
-**Mapa.** Los nodos que comparten su posición, sobre OpenStreetMap.
+**Ficha de un nodo.** Acciones, gráficas de batería, voltaje, ocupación del aire,
+señal y sensores de entorno, datos completos y traceroutes.
+
+![Ficha de un nodo](capturas/ficha.png)
+
+**Mapa.** Nodos, puntos compartidos (waypoints) y el rastro de un nodo. Tres tipos
+de mapa. Clic derecho para añadir un punto o fijar la posición de tu nodo.
 
 ![Mapa](capturas/mapa.png)
 
-**Mi nodo.** Tu nodo, la conexión y los canales.
+**Ajustes.** Toda la configuración del nodo y de sus módulos, canales,
+administración y preferencias de la app.
 
-![Mi nodo](capturas/yo.png)
+![Ajustes](capturas/ajustes.png)
+
+**Canales.** Editar, añadir y borrar canales. Compartir por QR o enlace e importar.
+
+![Canales](capturas/canales.png)
+
+**Configuración de radio.** Cada sección con sus controles, en castellano.
+
+![Configuración LoRa](capturas/configuracion.png)
+
+**Registro.** Los paquetes que oye tu nodo, con filtro por tipo.
+
+![Registro](capturas/registro.png)
 
 **Conectar.** Bluetooth, USB o red.
 
@@ -49,42 +70,72 @@ como Telegram o Spotify. Un punto rojo indica mensajes sin leer.
 
 ## Lo que hay
 
-- **Conexión** por Bluetooth LE, USB (puerto serie) o red TCP (puerto 4403).
-  Vuelve a conectar sola con la última conexión al arrancar.
-- **Mensajes** en todos los canales del nodo y chats directos con cualquier nodo.
-  - Estado de entrega: enviando, retransmitido por la malla, entregado o el error concreto.
-  - En los recibidos: saltos, SNR y RSSI.
-  - Contador de no leídos por conversación.
-  - Límite de 200 bytes por mensaje, como el cliente oficial.
-- **Nodos**: nombre, identificador, último contacto, saltos o MQTT, SNR, RSSI,
-  batería, voltaje, uso del canal, tiempo encendido, modelo, función, posición y si
-  admite cifrado directo. Con buscador.
-- **Mapa** con OpenStreetMap. Tu nodo en verde; los que no se oyen hace más de dos
-  horas, atenuados. Pulsa un nodo para ver su ficha y escribirle.
-- **Mi nodo**: datos del nodo conectado y lista de canales.
-- **Bandeja del sistema** (StatusNotifierItem): mostrar u ocultar, conectar o
-  desconectar, salir. Punto rojo con mensajes sin leer.
-- **Avisos de escritorio** cuando llega un mensaje y la ventana no está delante.
-- **Historial** guardado en `~/.local/share/malla/estado.json` (últimos 5000 mensajes).
-- **Modo demo** (`malla --demo`) para probar la interfaz sin radio.
+**Conexión**
+- Bluetooth LE, USB (puerto serie) o red TCP (puerto 4403).
+- Vuelve a conectar sola al arrancar y cuando se cae la conexión (por ejemplo,
+  tras reiniciar el nodo).
+
+**Mensajes**
+- Todos los canales del nodo y chats directos con cualquier nodo.
+- Responder a un mensaje y reaccionar con emoji, como en la app de Android.
+- Menú de cada mensaje (clic derecho): responder, reaccionar, copiar, reenviar si
+  falló, escribir al autor, ver su ficha y borrar.
+- Estado de entrega: enviando, retransmitido por la malla, entregado o el error.
+- Respuestas rápidas editables y selector de emoji.
+- Separadores por día, contador de no leídos y vista previa del último mensaje.
+- Silenciar una conversación, marcarla como leída o borrarla.
+- Exportar todos los mensajes a CSV.
+
+**Nodos**
+- Ordenar y filtrar: solo activos, sin MQTT, solo favoritos, mostrar ignorados.
+- Distancia y rumbo desde tu nodo.
+- Traceroute con la ruta de ida y vuelta y la SNR de cada salto.
+- Pedir posición e intercambiar datos de usuario.
+- Favoritos, ignorar y quitar de la lista del nodo.
+- Ficha con gráficas de la telemetría que Malla va guardando.
+
+**Mapa**
+- OpenStreetMap: calles, topográfico o humanitario.
+- Puntos compartidos (waypoints): recibir, crear, editar y borrar, con icono,
+  descripción y caducidad.
+- Rastro de las posiciones de un nodo.
+- Fijar la posición de tu nodo con clic derecho.
+
+**Ajustes del nodo**
+- Usuario: nombre largo, corto y modo radioaficionado.
+- Canales: editar nombre, clave (por defecto, aleatoria AES-256, sin cifrado o
+  propia), MQTT y precisión de la posición. Añadir, borrar, compartir por QR o
+  enlace e importar un enlace.
+- Radio: dispositivo, posición, energía, red, pantalla, LoRa, Bluetooth y seguridad.
+- Módulos: MQTT, telemetría, info de vecinos, guardar y reenviar, prueba de
+  alcance, mensajes predefinidos, notificación externa, puerto serie, audio,
+  hardware remoto, iluminación, sensor de detección, contador de personas y más.
+- Posición fija.
+- Administración: reiniciar, apagar, borrar la lista de nodos y restablecer.
+- Información del aparato: firmware y capacidades.
+
+**La app**
+- Icono en la bandeja del sistema con aviso de no leídos.
+- Avisos de escritorio; al pulsarlos se abre esa conversación.
+- Abrir al iniciar la sesión, arrancar escondida, tema claro u oscuro.
+- Registro de paquetes con filtro y pausa.
+- Modo demo (`malla --demo`) para probar sin radio.
 
 ## Lo que falta
 
-- **Configurar el nodo.** Ahora todo es de solo lectura: radio, canales, posición,
-  módulos y usuario se cambian desde la app del móvil. Es lo siguiente en la lista.
-- Responder a un mensaje concreto y reacciones con emoji.
-- Traceroute y pedir posición o datos a un nodo.
-- Waypoints (puntos marcados en el mapa).
-- Telemetría de entorno (temperatura, humedad…) y gráficas.
-- Rutas y rastros en el mapa.
-- Compartir canales por QR o URL. Copia de seguridad de la configuración.
-- Silenciar avisos por canal.
+- Probar con hardware real todo lo nuevo de la versión 0.2. Las capturas son del
+  modo demo. La versión 0.1 sí se probó con un Heltec V3 por Bluetooth.
+- Mapa sin conexión (guardar teselas).
+- Administrar otros nodos a distancia.
+- Pedir al nodo los mensajes guardados (cliente de "guardar y reenviar").
+- Gráfica de vecinos y resultados de la prueba de alcance en el mapa.
+- Enviar la posición del ordenador (GPS o ubicación del sistema).
+- Copia de seguridad completa de la configuración y actualizar el firmware.
+- Verificación de claves entre nodos.
 - Otros idiomas. La interfaz solo está en español.
 - Flatpak.
 
-Probado con un Heltec V3 por Bluetooth. USB y WiFi están hechos pero no se han
-probado aún con hardware real. Si los pruebas, cuenta cómo te ha ido en una
-[incidencia](https://github.com/FreeMEM/malla/issues).
+Si encuentras un fallo, cuéntalo en una [incidencia](https://github.com/FreeMEM/malla/issues).
 
 ## Instalar
 
@@ -142,7 +193,8 @@ Opciones de línea de órdenes:
 | `--demo` | Abre con datos inventados, sin radio y sin guardar nada. |
 | `--escanear` | Lista los nodos por Bluetooth y los puertos serie, sin ventana. |
 | `--probar <MAC>` | Conecta por Bluetooth, resume lo recibido y sale. |
-| `--pagina <nombre>` | Abre en `mensajes`, `nodos`, `mapa`, `yo` o `conectar`. |
+| `--oculta` | Arranca escondida en la bandeja. |
+| `--pagina <nombre>` | Abre en `mensajes`, `nodos`, `mapa`, `ajustes`, `registro`, `conectar`, `ficha:<id>` o `ajustes:<sección>`. |
 
 ## Empaquetado
 
