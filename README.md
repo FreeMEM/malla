@@ -96,9 +96,16 @@ Descarga el `.deb` de la [última versión](https://github.com/FreeMEM/malla/rel
 
 ### Arch Linux, CachyOS, Manjaro
 
-Desde AUR:
+Paquete ya compilado, de la [última versión](https://github.com/FreeMEM/malla/releases/latest):
 
-    yay -S malla
+    sudo pacman -U https://github.com/FreeMEM/malla/releases/download/v0.1.0/malla-0.1.0-1-x86_64.pkg.tar.zst
+
+O compilándolo tú con el PKGBUILD:
+
+    git clone https://github.com/FreeMEM/malla
+    cd malla/empaquetar/aur && makepkg -si
+
+Llegará a AUR cuando reabran el registro de cuentas.
 
 ### Desde el código
 
@@ -140,6 +147,7 @@ Opciones de línea de órdenes:
 ## Empaquetado
 
 - `empaquetar/deb.sh` crea el `.deb` en un contenedor de Ubuntu 24.04 (podman o docker).
+- `empaquetar/arch.sh` crea el paquete de Arch en un contenedor Arch limpio.
 - `empaquetar/aur/` tiene el `PKGBUILD` de AUR y `publicar.sh`, que lo sube.
 
 ## Gracias a
