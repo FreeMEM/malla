@@ -1,5 +1,12 @@
 # Historial de cambios
 
+## 0.2.1 (8 de noviembre de 2026)
+
+- Arreglado: si el nodo se reiniciaba (por ejemplo, al cambiar un ajuste), Malla no
+  volvía a conectar hasta cerrarla y abrirla. La búsqueda Bluetooth se quedaba abierta
+  y bloqueaba la siguiente.
+- El aviso de error de Bluetooth explica la causa en castellano.
+
 ## 0.2.0 (8 de noviembre de 2026)
 
 **Mensajes**

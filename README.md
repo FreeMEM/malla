@@ -152,7 +152,7 @@ Descarga el `.deb` de la [última versión](https://github.com/FreeMEM/malla/rel
 
 Paquete ya compilado, de la [última versión](https://github.com/FreeMEM/malla/releases/latest):
 
-    sudo pacman -U https://github.com/FreeMEM/malla/releases/download/v0.2.0/malla-0.2.0-1-x86_64.pkg.tar.zst
+    sudo pacman -U https://github.com/FreeMEM/malla/releases/download/v0.2.1/malla-0.2.1-1-x86_64.pkg.tar.zst
 
 O compilándolo tú con el PKGBUILD:
 

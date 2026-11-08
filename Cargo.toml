@@ -1,6 +1,6 @@
 [package]
 name = "malla"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Cliente de escritorio Meshtastic para Linux (GTK4 + libadwaita)"
 license = "GPL-3.0-only"
@@ -44,3 +44,8 @@ assets = [
     ["data/es.freemem.Malla.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
     ["README.md", "usr/share/doc/malla/README.md", "644"],
 ]
+
+# Copia de meshtastic 0.1.9 con un arreglo: para la búsqueda Bluetooth tras usarla,
+# para poder reconectar sin reiniciar Malla. Ver vendor/meshtastic/LEEME-MALLA.md.
+[patch.crates-io]
+meshtastic = { path = "vendor/meshtastic" }

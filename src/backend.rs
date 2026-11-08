@@ -525,6 +525,24 @@ fn dest_of(conv: Conv) -> (PacketDestination, u32) {
     }
 }
 
+/// Explica en castellano por qué falló la conexión Bluetooth.
+fn ble_error(e: &meshtastic::errors::Error) -> String {
+    match e {
+        meshtastic::errors::Error::StreamBuildError { description, source } => {
+            if description.starts_with("Failed to find") {
+                "no encuentro el nodo. Comprueba que está encendido, cerca y sin otro aparato conectado (el móvil, por ejemplo)".into()
+            } else if description.starts_with("Failed to connect") {
+                format!("el nodo no acepta la conexión ({source})")
+            } else if description.starts_with("Failed to find characteristic") || description.starts_with("Failed to discover") {
+                "el nodo no ofrece el servicio de Meshtastic. Prueba a reiniciarlo".into()
+            } else {
+                format!("{description} ({source})")
+            }
+        }
+        e => e.to_string(),
+    }
+}
+
 async fn open(target: &Target) -> Result<Conn, String> {
     let api = StreamApi::new();
     let (rx, api) = match target {
@@ -532,7 +550,7 @@ async fn open(target: &Target) -> Result<Conn, String> {
             let id = BleId::from_mac_address(mac).map_err(|e| e.to_string())?;
             let s = utils::stream::build_ble_stream(&id, Duration::from_secs(8))
                 .await
-                .map_err(|e| format!("Bluetooth: {e}"))?;
+                .map_err(|e| format!("Bluetooth: {}", ble_error(&e)))?;
             api.connect(s).await
         }
         Target::Serial { port } => {
