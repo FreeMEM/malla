@@ -140,7 +140,7 @@ Opciones de línea de órdenes:
 ## Empaquetado
 
 - `empaquetar/deb.sh` crea el `.deb` en un contenedor de Ubuntu 24.04 (podman o docker).
-- `empaquetar/aur/` tiene el `PKGBUILD` de AUR.
+- `empaquetar/aur/` tiene el `PKGBUILD` de AUR y `publicar.sh`, que lo sube.
 
 ## Gracias a
 
