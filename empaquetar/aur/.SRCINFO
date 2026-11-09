@@ -1,6 +1,6 @@
 pkgbase = malla
 	pkgdesc = Cliente de escritorio para la red LoRa Meshtastic (GTK4 + libadwaita)
-	pkgver = 0.2.1
+	pkgver = 0.3.0
 	pkgrel = 1
 	url = https://github.com/FreeMEM/malla
 	arch = x86_64
@@ -18,7 +18,7 @@ pkgbase = malla
 	depends = graphene
 	depends = glibc
 	depends = gcc-libs
-	source = malla-0.2.1.tar.gz::https://github.com/FreeMEM/malla/archive/refs/tags/v0.2.1.tar.gz
-	sha256sums = d2babba7993d2110b70e7ce464a5a98fc77cf6e5499d1062bfb2067f42c99283
+	source = malla-0.3.0.tar.gz::https://github.com/FreeMEM/malla/archive/refs/tags/v0.3.0.tar.gz
+	sha256sums = 90dba1f4347310f87e12ae4f6bc5d30cae498496f2e0c1020b7fd54aa6379fa8
 
 pkgname = malla

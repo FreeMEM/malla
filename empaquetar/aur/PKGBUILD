@@ -1,6 +1,6 @@
 # Maintainer: FreeMEM <devel@freemem.space>
 pkgname=malla
-pkgver=0.2.1
+pkgver=0.3.0
 pkgrel=1
 pkgdesc="Cliente de escritorio para la red LoRa Meshtastic (GTK4 + libadwaita)"
 arch=('x86_64' 'aarch64')
@@ -9,7 +9,7 @@ license=('GPL-3.0-only')
 depends=('gtk4' 'libadwaita' 'libshumate' 'dbus' 'glib2' 'cairo' 'pango' 'gdk-pixbuf2' 'graphene' 'glibc' 'gcc-libs')
 makedepends=('cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('d2babba7993d2110b70e7ce464a5a98fc77cf6e5499d1062bfb2067f42c99283')
+sha256sums=('90dba1f4347310f87e12ae4f6bc5d30cae498496f2e0c1020b7fd54aa6379fa8')
 
 prepare() {
     cd "$pkgname-$pkgver"
