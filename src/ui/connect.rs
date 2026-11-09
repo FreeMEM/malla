@@ -26,11 +26,17 @@ impl App {
             page.add(&g);
         }
 
-        if let Some(t) = st.saved.last_target.clone() {
-            let g = adw::PreferencesGroup::builder().title("Última conexión").build();
-            let r = adw::ActionRow::builder().title(t.label()).use_markup(false).build();
-            r.add_suffix(&self.connect_button(t));
-            g.add(&r);
+        let mut recent = st.saved.recent.clone();
+        if recent.is_empty() {
+            recent.extend(st.saved.last_target.clone());
+        }
+        if !recent.is_empty() {
+            let g = adw::PreferencesGroup::builder().title("Conexiones recientes").build();
+            for t in recent {
+                let r = adw::ActionRow::builder().title(t.label()).use_markup(false).build();
+                r.add_suffix(&self.connect_button(t));
+                g.add(&r);
+            }
             page.add(&g);
         }
         drop(st);

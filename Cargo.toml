@@ -1,6 +1,6 @@
 [package]
 name = "malla"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 description = "Cliente de escritorio Meshtastic para Linux (GTK4 + libadwaita)"
 license = "GPL-3.0-only"

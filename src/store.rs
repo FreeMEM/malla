@@ -28,6 +28,20 @@ fn yes() -> bool {
     true
 }
 
+/// Una respuesta automática: si un mensaje contiene `keyword`, se contesta `reply`.
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+pub struct AutoRule {
+    pub keyword: String,
+    pub reply: String,
+    /// 0 = solo mensajes directos, 1 = solo canales, 2 = los dos.
+    #[serde(default)]
+    pub scope: u8,
+}
+
+fn default_rules() -> Vec<AutoRule> {
+    vec![AutoRule { keyword: "ping".into(), reply: "pong 🏓 Te recibo con SNR {snr} dB, {saltos}.".into(), scope: 0 }]
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Prefs {
     /// Avisos de escritorio al llegar mensajes.
@@ -45,9 +59,23 @@ pub struct Prefs {
     /// Fuente de teselas del mapa.
     #[serde(default)]
     pub map_source: String,
+    /// Mapa oscuro.
+    #[serde(default)]
+    pub map_night: bool,
+    /// Tamaño de la ventana (ancho, alto) y si estaba maximizada.
+    #[serde(default)]
+    pub window: Option<(i32, i32, bool)>,
+    /// Mirar en GitHub si hay una versión nueva al arrancar.
+    #[serde(default)]
+    pub check_updates: bool,
     /// Respuestas rápidas.
     #[serde(default = "default_quick")]
     pub quick: Vec<String>,
+    /// Respuestas automáticas activadas.
+    #[serde(default)]
+    pub auto_on: bool,
+    #[serde(default = "default_rules")]
+    pub auto_rules: Vec<AutoRule>,
 }
 
 fn default_quick() -> Vec<String> {
@@ -65,7 +93,12 @@ impl Default for Prefs {
             start_hidden: false,
             theme: String::new(),
             map_source: String::new(),
+            map_night: false,
+            window: None,
+            check_updates: false,
             quick: default_quick(),
+            auto_on: false,
+            auto_rules: default_rules(),
         }
     }
 }
@@ -74,6 +107,9 @@ impl Default for Prefs {
 pub struct Saved {
     #[serde(default)]
     pub last_target: Option<Target>,
+    /// Últimas conexiones distintas, la más reciente primero.
+    #[serde(default)]
+    pub recent: Vec<Target>,
     #[serde(default)]
     pub messages: Vec<Msg>,
     /// Nombres de nodos conocidos, para mostrar el historial sin conexión.
@@ -122,6 +158,12 @@ impl Saved {
             let extra = self.traces.len() - MAX_TRACES;
             self.traces.drain(..extra);
         }
+    }
+
+    pub fn add_recent(&mut self, t: Target) {
+        self.recent.retain(|x| *x != t);
+        self.recent.insert(0, t);
+        self.recent.truncate(5);
     }
 
     pub fn is_muted(&self, c: Conv) -> bool {

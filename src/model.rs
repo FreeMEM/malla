@@ -200,6 +200,8 @@ pub struct PacketLog {
     pub encrypted: bool,
     pub via_mqtt: bool,
     pub summary: String,
+    /// Paquete completo, con la carga decodificada, en JSON legible.
+    pub detail: String,
 }
 
 /// Órdenes de la UI al hilo de radio.
@@ -243,6 +245,8 @@ pub enum Event {
     Trace(Trace),
     Waypoint(Waypoint),
     Packet(PacketLog),
+    /// Estadísticas de la radio de tu nodo (paquetes enviados, recibidos…).
+    LocalStats(protobufs::LocalStats),
     Info(String),
     Error(String),
 }

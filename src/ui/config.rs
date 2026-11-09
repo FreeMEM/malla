@@ -62,8 +62,49 @@ fn section_value<T: serde::Serialize>(c: &T) -> Option<(String, Value)> {
 
 macro_rules! opts {
     ($t:ty) => {
-        <$t>::iter().map(|e| (e as i32, e.as_str_name().to_string())).collect::<Vec<(i32, String)>>()
+        <$t>::iter().map(|e| (e as i32, enum_label(e.as_str_name()))).collect::<Vec<(i32, String)>>()
     };
+}
+
+/// Nombre en castellano de los valores más comunes, con el original entre paréntesis
+/// para poder buscarlo en la documentación de Meshtastic.
+fn enum_label(raw: &str) -> String {
+    let es = match raw {
+        "UNSET" => "Sin definir",
+        "CLIENT" => "Cliente",
+        "CLIENT_MUTE" => "Cliente que no repite",
+        "CLIENT_HIDDEN" => "Cliente oculto",
+        "CLIENT_BASE" => "Cliente base",
+        "ROUTER" => "Router",
+        "ROUTER_LATE" => "Router que repite al final",
+        "ROUTER_CLIENT" => "Router y cliente",
+        "REPEATER" => "Repetidor",
+        "TRACKER" => "Rastreador",
+        "TAK_TRACKER" => "Rastreador TAK",
+        "SENSOR" => "Sensor",
+        "LOST_AND_FOUND" => "Objetos perdidos",
+        "ALL" => "Todo",
+        "ALL_SKIP_DECODING" => "Todo, sin descifrar",
+        "LOCAL_ONLY" => "Solo de mis canales",
+        "KNOWN_ONLY" => "Solo de nodos conocidos",
+        "NONE" => "Nada",
+        "CORE_PORTNUMS_ONLY" => "Solo los tipos básicos",
+        "DISABLED" => "Desactivado",
+        "ENABLED" => "Activado",
+        "NOT_PRESENT" => "No tiene",
+        "METRIC" => "Métrico",
+        "IMPERIAL" => "Imperial",
+        "STATIC" => "Estática",
+        "RANDOM_PIN" => "PIN aleatorio",
+        "FIXED_PIN" => "PIN fijo",
+        "NO_PIN" => "Sin PIN",
+        "DEFAULT" => "Por defecto",
+        "ALL_ENABLED" => "Todo activado",
+        "DIRECT_MSG_ONLY" => "Solo mensajes directos",
+        "SYSTEM_ONLY" => "Solo avisos del sistema",
+        _ => return raw.to_string(),
+    };
+    format!("{es} ({raw})")
 }
 
 fn enum_options(section: &str, field: &str) -> Option<Vec<(i32, String)>> {
@@ -261,6 +302,26 @@ fn label(field: &str) -> String {
     out
 }
 
+/// Campos que son una suma de opciones (cada bit, una casilla).
+fn bitmask_options(section: &str, key: &str) -> Option<&'static [(u32, &'static str)]> {
+    const POSITION: [(u32, &str); 10] = [
+        (1, "Altitud"),
+        (2, "Altitud sobre el nivel del mar"),
+        (4, "Separación geoidal"),
+        (8, "Precisión (DOP)"),
+        (16, "Precisión horizontal y vertical"),
+        (32, "Satélites a la vista"),
+        (64, "Número de secuencia"),
+        (128, "Hora"),
+        (256, "Rumbo"),
+        (512, "Velocidad"),
+    ];
+    match (section, key) {
+        ("position", "position_flags") => Some(&POSITION),
+        _ => None,
+    }
+}
+
 /// Lee el valor actual de un control.
 type Reader = Box<dyn Fn() -> Value>;
 
@@ -286,7 +347,24 @@ fn build_fields(
                 readers.push((p, Box::new(move || Value::Bool(r.is_active()))));
             }
             Value::Number(n) => {
-                if let Some(opts) = enum_options(section, k) {
+                if let Some(flags) = bitmask_options(section, k) {
+                    let cur = n.as_u64().unwrap_or(0) as u32;
+                    let r = adw::ExpanderRow::builder().title(&title).subtitle("Marca cada dato por separado").build();
+                    let mut switches = vec![];
+                    for (bit, name) in flags {
+                        let sw = adw::SwitchRow::builder().title(*name).active(cur & bit != 0).build();
+                        r.add_row(&sw);
+                        switches.push((*bit, sw));
+                    }
+                    group.add(&r);
+                    // Conserva los bits que Malla no conoce.
+                    let known: u32 = flags.iter().map(|f| f.0).fold(0, |a, b| a | b);
+                    let rest = cur & !known;
+                    readers.push((
+                        p,
+                        Box::new(move || Value::from(switches.iter().filter(|(_, s)| s.is_active()).fold(rest, |a, (b, _)| a | b) as u64)),
+                    ));
+                } else if let Some(opts) = enum_options(section, k) {
                     let names: Vec<&str> = opts.iter().map(|o| o.1.as_str()).collect();
                     let model = gtk::StringList::new(&names);
                     let cur = n.as_i64().unwrap_or(0) as i32;
@@ -380,7 +458,7 @@ impl App {
                     "bluetooth" => Some("Si cambias el modo o el PIN tendrás que volver a emparejar el nodo."),
                     "network" => Some("Con la WiFi activada, algunos aparatos apagan el Bluetooth."),
                     "security" => Some("Desactivar la consola serie o la API puede dejarte sin acceso por USB."),
-                    "mqtt" => Some("El nodo necesita WiFi o «Usar la conexión del cliente» para llegar al servidor."),
+                    "mqtt" => Some("El nodo necesita WiFi o \"Usar la conexión del cliente\" para llegar al servidor."),
                     _ => None,
                 };
                 let g = adw::PreferencesGroup::builder().description(warn.unwrap_or("")).build();

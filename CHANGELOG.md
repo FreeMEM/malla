@@ -1,5 +1,37 @@
 # Historial de cambios
 
+## 0.3.0 (9 de noviembre de 2026)
+
+Funciones que tenían otros clientes de escritorio, como MeshApp, y le faltaban a Malla.
+
+**Ajustes**
+- Copia de seguridad: guardar la configuración del nodo en un fichero JSON (completa,
+  o plantilla sin nombre, claves ni canales) y cargarla en el mismo nodo o en otro.
+- Poner el nodo en hora con la del ordenador.
+- Los datos que se envían con la posición se eligen con casillas.
+- Las opciones de los desplegables, en castellano.
+- Respuestas automáticas por palabra clave.
+
+**Nodos y telemetría**
+- Historial por periodos (1 hora, 24 horas, 7 días, 30 días o todo) y en tabla.
+- Estadísticas de la radio de tu nodo.
+- Filtros nuevos: solo directos y solo con posición. Buscar también por número.
+
+**Mapa**
+- Modo oscuro.
+- Buscar un nodo o un punto y ver todos los nodos de golpe.
+- Medir distancias con clic derecho.
+- Dibujar en el mapa la ruta de un traceroute.
+
+**Registro**
+- Pulsar un paquete muestra todo su contenido decodificado.
+- Exportar los paquetes a JSON o CSV.
+
+**La app**
+- Lista de conexiones recientes.
+- Recuerda el tamaño de la ventana.
+- Aviso de versiones nuevas, si se activa.
+
 ## 0.2.1 (8 de noviembre de 2026)
 
 - Arreglado: si el nodo se reiniciaba (por ejemplo, al cambiar un ajuste), Malla no

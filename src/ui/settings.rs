@@ -80,6 +80,7 @@ impl App {
             "posicion_fija" => self.fixed_position_page(),
             "info" => self.info_page(),
             "app" => self.app_page(),
+            "respuestas" => self.auto_page(),
             k => {
                 if let Some((_, t, _)) = RADIO.iter().find(|r| r.0 == k) {
                     self.config_page(Kind::Radio, k, t)
@@ -169,9 +170,37 @@ impl App {
         page.add(&g);
 
         let g = adw::PreferencesGroup::builder()
-            .title("Administración")
-            .description("Acciones sobre el nodo conectado. Piden confirmación.")
+            .title("Copia de seguridad")
+            .description("La configuración del nodo en un fichero JSON, para guardarla o pasarla a otro nodo.")
             .build();
+        let rows: [(&str, &str, u8); 3] = [
+            ("Guardar una copia completa…", "Todo: radio, módulos, canales con sus claves y tu usuario", 0),
+            ("Guardar una plantilla…", "Sin tu nombre, sin claves y sin canales, para compartirla", 1),
+            ("Cargar desde un fichero…", "Aplica al nodo la configuración de una copia", 2),
+        ];
+        for (t, sub, k) in rows {
+            let r = nav_row(t, sub);
+            let a = self.clone();
+            r.connect_activated(move |_| match k {
+                0 => a.export_config(false),
+                1 => a.export_config(true),
+                _ => a.import_config(),
+            });
+            g.add(&r);
+        }
+        page.add(&g);
+
+        let g = adw::PreferencesGroup::builder()
+            .title("Administración")
+            .description("Acciones sobre el nodo conectado. Las que cambian algo piden confirmación.")
+            .build();
+        let r = adw::ActionRow::builder().title("Poner en hora el nodo").subtitle("Le pasa la hora de este ordenador. Útil si no tiene GPS").activatable(true).build();
+        let a = self.clone();
+        r.connect_activated(move |_| {
+            a.admin(vec![P::SetTimeOnly(now())]);
+            a.toast("Hora enviada al nodo");
+        });
+        g.add(&r);
         let can_shutdown = st.metadata.as_ref().map(|m| m.can_shutdown).unwrap_or(true);
         let actions: Vec<(&str, &str, &str, P)> = vec![
             ("Reiniciar el nodo", "Se reinicia en 5 segundos y Malla vuelve a conectar sola.", "Reiniciar", P::RebootSeconds(5)),
@@ -203,6 +232,13 @@ impl App {
         let r = nav_row("Preferencias de Malla", "Avisos, arranque, tema, respuestas rápidas y datos");
         let a = self.clone();
         r.connect_activated(move |_| a.open_settings_section("app"));
+        g.add(&r);
+        let r = nav_row(
+            "Respuestas automáticas",
+            if st.saved.prefs.auto_on { "Activadas · contesta solo a ciertas palabras" } else { "Desactivadas · contestar solo a ciertas palabras" },
+        );
+        let a = self.clone();
+        r.connect_activated(move |_| a.open_settings_section("respuestas"));
         g.add(&r);
         page.add(&g);
 
@@ -598,10 +634,21 @@ impl App {
             "oscuro" => 2,
             _ => 0,
         });
+        let updates = adw::SwitchRow::builder()
+            .title("Avisar de versiones nuevas")
+            .subtitle("Al arrancar, pregunta a GitHub cuál es la última versión")
+            .active(prefs.check_updates)
+            .build();
         g.add(&auto);
         g.add(&hidden);
         g.add(&theme);
+        g.add(&updates);
         page.add(&g);
+        let a = self.clone();
+        updates.connect_active_notify(move |r| {
+            a.st.borrow_mut().saved.prefs.check_updates = r.is_active();
+            a.save();
+        });
 
         let a = self.clone();
         notify.connect_active_notify(move |r| {
@@ -734,5 +781,191 @@ impl App {
         page.add(&g);
 
         page_with("Preferencias de Malla", &page, None)
+    }
+
+    /// Copia de la configuración en JSON. Con `template`, sin datos personales ni claves.
+    fn backup_json(&self, template: bool) -> Option<serde_json::Value> {
+        let st = self.st.borrow();
+        if st.config.is_empty() {
+            return None;
+        }
+        let mut config = serde_json::Map::new();
+        for (k, c) in &st.config {
+            if template && k == "security" {
+                continue;
+            }
+            let mut v = serde_json::to_value(c).ok()?;
+            if template {
+                if let Some(n) = v.pointer_mut("/payload_variant/network") {
+                    n["wifi_psk"] = serde_json::Value::String(String::new());
+                }
+                if let Some(pos) = v.pointer_mut("/payload_variant/position") {
+                    pos["fixed_position"] = serde_json::Value::Bool(false);
+                }
+            }
+            config.insert(k.clone(), v);
+        }
+        let mut modules = serde_json::Map::new();
+        for (k, c) in &st.modules {
+            let mut v = serde_json::to_value(c).ok()?;
+            if template {
+                if let Some(m) = v.pointer_mut("/payload_variant/mqtt") {
+                    m["username"] = serde_json::Value::String(String::new());
+                    m["password"] = serde_json::Value::String(String::new());
+                }
+            }
+            modules.insert(k.clone(), v);
+        }
+        let mut out = serde_json::json!({
+            "malla_copia": 1,
+            "tipo": if template { "plantilla" } else { "completa" },
+            "fecha": fmt_datetime(now()),
+            "firmware": st.metadata.as_ref().map(|m| m.firmware_version.clone()).unwrap_or_default(),
+            "config": config,
+            "module_config": modules,
+        });
+        if !template {
+            out["nodo"] = serde_json::Value::String(Node::id_str(st.my));
+            if let Some(u) = &st.my_user {
+                out["owner"] = serde_json::to_value(u).ok()?;
+            }
+            let ch: Vec<&protobufs::Channel> = st.channels_full.values().collect();
+            out["channels"] = serde_json::to_value(ch).ok()?;
+        }
+        Some(out)
+    }
+
+    pub(super) fn export_config(self: &Rc<Self>, template: bool) {
+        let Some(v) = self.backup_json(template) else {
+            self.toast("Conéctate a tu nodo para leer su configuración");
+            return;
+        };
+        let id = Node::id_str(self.st.borrow().my).trim_start_matches('!').to_string();
+        let name = if template { "malla-plantilla.json".to_string() } else { format!("malla-copia-{id}.json") };
+        let dialog = gtk::FileDialog::builder().title(if template { "Guardar plantilla" } else { "Guardar copia" }).initial_name(name).build();
+        let a = self.clone();
+        dialog.save(Some(&self.w.window), gio::Cancellable::NONE, move |res| {
+            let Ok(file) = res else { return };
+            let Some(path) = file.path() else { return };
+            let text = serde_json::to_string_pretty(&v).unwrap_or_default();
+            match std::fs::write(&path, text) {
+                Ok(()) => a.toast(&format!("Configuración guardada en {}", path.display())),
+                Err(e) => a.toast(&format!("No se pudo guardar: {e}")),
+            }
+        });
+    }
+
+    pub(super) fn import_config(self: &Rc<Self>) {
+        if !self.st.borrow().connected {
+            self.toast("Conéctate al nodo al que quieres pasar la configuración");
+            return;
+        }
+        let dialog = gtk::FileDialog::builder().title("Cargar configuración").build();
+        let a = self.clone();
+        dialog.open(Some(&self.w.window), gio::Cancellable::NONE, move |res| {
+            let Ok(file) = res else { return };
+            let Some(path) = file.path() else { return };
+            match parse_backup(&path) {
+                Ok((list, resumen)) => {
+                    let a2 = a.clone();
+                    a.confirm(
+                        "¿Cargar esta configuración?",
+                        &format!("Se aplicará al nodo conectado: {resumen}. El nodo se reiniciará."),
+                        "Cargar",
+                        move || a2.admin(list.clone()),
+                    );
+                }
+                Err(e) => a.toast(&format!("No se pudo leer la copia: {e}")),
+            }
+        });
+    }
+}
+
+/// Lee una copia de Malla y la convierte en las órdenes de administración que la aplican.
+fn parse_backup(path: &std::path::Path) -> Result<(Vec<P>, String), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    if v.get("malla_copia").is_none() {
+        return Err("no es una copia de Malla".into());
+    }
+    let mut list = vec![];
+    let mut parts = vec![];
+    if let Some(o) = v.get("owner").filter(|o| !o.is_null()) {
+        let u: protobufs::User = serde_json::from_value(o.clone()).map_err(|e| format!("usuario: {e}"))?;
+        list.push(P::SetOwner(u));
+        parts.push("tu usuario".to_string());
+    }
+    let mut n = 0;
+    for (k, c) in v.get("config").and_then(|c| c.as_object()).into_iter().flatten() {
+        let c: protobufs::Config = serde_json::from_value(c.clone()).map_err(|e| format!("{k}: {e}"))?;
+        list.push(P::SetConfig(c));
+        n += 1;
+    }
+    if n > 0 {
+        parts.push(format!("{n} secciones de radio"));
+    }
+    let mut n = 0;
+    for (k, c) in v.get("module_config").and_then(|c| c.as_object()).into_iter().flatten() {
+        let c: protobufs::ModuleConfig = serde_json::from_value(c.clone()).map_err(|e| format!("{k}: {e}"))?;
+        list.push(P::SetModuleConfig(c));
+        n += 1;
+    }
+    if n > 0 {
+        parts.push(format!("{n} módulos"));
+    }
+    if let Some(chs) = v.get("channels").and_then(|c| c.as_array()) {
+        for c in chs {
+            let c: protobufs::Channel = serde_json::from_value(c.clone()).map_err(|e| format!("canal: {e}"))?;
+            list.push(P::SetChannel(c));
+        }
+        parts.push(format!("{} canales", chs.len()));
+    }
+    if list.is_empty() {
+        return Err("la copia está vacía".into());
+    }
+    Ok((list, parts.join(", ")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use protobufs::{config, module_config};
+
+    #[test]
+    fn copia_ida_y_vuelta() {
+        let lora = protobufs::Config {
+            payload_variant: Some(config::PayloadVariant::Lora(config::LoRaConfig { hop_limit: 5, tx_enabled: true, ..Default::default() })),
+        };
+        let mqtt = protobufs::ModuleConfig {
+            payload_variant: Some(module_config::PayloadVariant::Mqtt(module_config::MqttConfig {
+                enabled: true,
+                address: "mqtt.ejemplo".into(),
+                ..Default::default()
+            })),
+        };
+        let ch = protobufs::Channel {
+            index: 1,
+            role: 2,
+            settings: Some(protobufs::ChannelSettings { name: "Costa".into(), psk: vec![1, 2, 3], ..Default::default() }),
+        };
+        let user = protobufs::User { long_name: "Prueba".into(), short_name: "PRB".into(), ..Default::default() };
+        let v = serde_json::json!({
+            "malla_copia": 1,
+            "config": { "lora": lora },
+            "module_config": { "mqtt": mqtt },
+            "channels": [ch],
+            "owner": user,
+        });
+        let dir = std::env::temp_dir().join(format!("malla-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("copia.json");
+        std::fs::write(&f, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+        let (list, resumen) = parse_backup(&f).expect("se lee");
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(list.len(), 4, "{resumen}");
+        assert!(list.contains(&P::SetConfig(lora)));
+        assert!(list.contains(&P::SetModuleConfig(mqtt)));
+        assert!(list.contains(&P::SetChannel(ch)));
+        assert!(list.contains(&P::SetOwner(user)));
     }
 }

@@ -319,8 +319,30 @@ fn extra(emit: &dyn Fn(Event), t: u32) {
             encrypted: *port == "cifrado",
             via_mqtt: false,
             summary: sum.to_string(),
+            detail: serde_json::to_string_pretty(&serde_json::json!({
+                "from": from, "to": to, "channel": 0, "id": 0x5a5a_0000u32 + i as u32,
+                "rx_time": t - (pk.len() - i) as u32 * 37, "rx_snr": 5.0 - i as f32 * 1.7,
+                "rx_rssi": -80 - i as i32 * 6, "hop_limit": 3 - i as u32 % 3, "hop_start": 3,
+                "decoded": { "portnum": port, "contenido": sum },
+            }))
+            .unwrap_or_default(),
         }));
     }
+    emit(Event::LocalStats(meshtastic::protobufs::LocalStats {
+        uptime_seconds: 3 * 86400 + 5 * 3600,
+        channel_utilization: 12.4,
+        air_util_tx: 1.8,
+        num_packets_tx: 412,
+        num_packets_rx: 5310,
+        num_packets_rx_bad: 37,
+        num_online_nodes: 14,
+        num_total_nodes: 23,
+        num_rx_dupe: 1890,
+        num_tx_relay: 268,
+        num_tx_relay_canceled: 95,
+        num_tx_dropped: 2,
+        ..Default::default()
+    }));
     emit(Event::Waypoint(Waypoint {
         id: 4242,
         lat: 36.60,

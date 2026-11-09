@@ -94,6 +94,9 @@ enum Step {
     Retry,
 }
 
+/// Reintentos automáticos antes de rendirse (5+10+15+20+25 s ≈ 75 s).
+const MAX_REINTENTOS: u32 = 5;
+
 struct Radio {
     conn: Option<Conn>,
     router: Router,
@@ -157,6 +160,20 @@ async fn run(mut cmds: mpsc::UnboundedReceiver<Command>, ui: Ui) {
 impl Radio {
     fn schedule_retry(&mut self, reason: String) {
         match self.wanted.clone() {
+            // Cada intento por Bluetooth hace un escaneo BLE, y en shiva eso
+            // tumbaba bluetoothd en bucle (y con él el audio de los cascos).
+            // Así que tras unos cuantos fallos se deja de insistir.
+            Some(_) if self.retries >= MAX_REINTENTOS => {
+                self.wanted = None;
+                self.retry_at = None;
+                self.retries = 0;
+                emit(
+                    &self.ui,
+                    Event::Disconnected(Some(format!(
+                        "{reason}. Dejé de reintentar tras {MAX_REINTENTOS} reintentos"
+                    ))),
+                );
+            }
             Some(target) => {
                 self.retries += 1;
                 let secs = (5 * self.retries as u64).min(30);
@@ -392,6 +409,7 @@ impl Radio {
             encrypted: true,
             via_mqtt: p.via_mqtt,
             summary: String::new(),
+            detail: packet_detail(&p),
         };
 
         if let Some(mesh_packet::PayloadVariant::Decoded(d)) = &p.payload_variant {
@@ -456,6 +474,12 @@ impl Radio {
                                 patch.pressure = m.barometric_pressure;
                                 log.summary = "entorno".into();
                             }
+                            Some(telemetry::Variant::LocalStats(m)) => {
+                                log.summary = format!("estadísticas: {} enviados, {} recibidos", m.num_packets_tx, m.num_packets_rx);
+                                if p.from == my {
+                                    emit(ui, Event::LocalStats(m));
+                                }
+                            }
                             Some(_) => log.summary = "otra telemetría".into(),
                             None => {}
                         }
@@ -516,6 +540,70 @@ impl Radio {
             emit(ui, Event::NodePatch(p.from, patch));
         }
     }
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(" ")
+}
+
+/// Pasa a hexadecimal los campos de bytes que serde deja como listas de números.
+fn bytes_to_hex(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::Object(m) => {
+            for (k, x) in m.iter_mut() {
+                let is_bytes = ["public_key", "macaddr", "psk", "payload", "encrypted", "xeddsa_signature"].contains(&k.as_str());
+                if let (true, serde_json::Value::Array(a)) = (is_bytes, &*x) {
+                    let b: Vec<u8> = a.iter().filter_map(|n| n.as_u64().map(|n| n as u8)).collect();
+                    *x = serde_json::Value::String(hex(&b));
+                } else {
+                    bytes_to_hex(x);
+                }
+            }
+        }
+        serde_json::Value::Array(a) => a.iter_mut().for_each(bytes_to_hex),
+        _ => {}
+    }
+}
+
+/// La carga de un paquete decodificada según su puerto, en JSON.
+fn decode_payload(port: Option<PortNum>, b: &[u8]) -> serde_json::Value {
+    fn j<T: serde::Serialize, E>(r: Result<T, E>) -> serde_json::Value {
+        r.ok().and_then(|t| serde_json::to_value(t).ok()).unwrap_or(serde_json::Value::Null)
+    }
+    match port {
+        Some(PortNum::TextMessageApp) => serde_json::Value::String(String::from_utf8_lossy(b).into_owned()),
+        Some(PortNum::PositionApp) => j(protobufs::Position::decode(b)),
+        Some(PortNum::NodeinfoApp) => j(protobufs::User::decode(b)),
+        Some(PortNum::TelemetryApp) => j(protobufs::Telemetry::decode(b)),
+        Some(PortNum::RoutingApp) => j(protobufs::Routing::decode(b)),
+        Some(PortNum::TracerouteApp) => j(protobufs::RouteDiscovery::decode(b)),
+        Some(PortNum::WaypointApp) => j(protobufs::Waypoint::decode(b)),
+        Some(PortNum::NeighborinfoApp) => j(protobufs::NeighborInfo::decode(b)),
+        Some(PortNum::AdminApp) => j(protobufs::AdminMessage::decode(b)),
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// El paquete completo en JSON legible, para el registro.
+fn packet_detail(p: &MeshPacket) -> String {
+    let mut v = serde_json::to_value(p).unwrap_or_default();
+    if let (Some(mesh_packet::PayloadVariant::Decoded(d)), serde_json::Value::Object(m)) = (&p.payload_variant, &mut v) {
+        let port = PortNum::try_from(d.portnum).ok();
+        let mut dec = serde_json::to_value(d).unwrap_or_default();
+        if let serde_json::Value::Object(dm) = &mut dec {
+            if let Some(pn) = port {
+                dm.insert("portnum".into(), serde_json::Value::String(pn.as_str_name().into()));
+            }
+            let content = decode_payload(port, &d.payload);
+            if !content.is_null() {
+                dm.insert("contenido".into(), content);
+            }
+        }
+        m.remove("payload_variant");
+        m.insert("decoded".into(), dec);
+    }
+    bytes_to_hex(&mut v);
+    serde_json::to_string_pretty(&v).unwrap_or_default()
 }
 
 fn dest_of(conv: Conv) -> (PacketDestination, u32) {

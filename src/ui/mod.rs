@@ -15,6 +15,7 @@ use crate::model::*;
 use crate::store::{self, Saved};
 use crate::tray;
 
+mod bot;
 mod chart;
 mod chat;
 mod config;
@@ -36,6 +37,8 @@ const CSS: &str = r#"
 .bubble { padding: 6px 10px; border-radius: 12px; background: alpha(@view_fg_color, 0.07); }
 .bubble.mine { background: alpha(#3584e4, 0.30); }
 .meta { font-size: smaller; opacity: 0.7; }
+.noche { filter: invert(1) hue-rotate(180deg) brightness(0.95) contrast(0.9); }
+.measure { padding: 6px 12px; border-radius: 8px; font-weight: bold; }
 .quote { border-left: 3px solid alpha(@view_fg_color, 0.4); padding-left: 6px; font-size: smaller; opacity: 0.8; }
 .reaction { padding: 0 6px; min-height: 0; border-radius: 10px; font-size: smaller; }
 .daysep { font-size: smaller; opacity: 0.6; margin: 8px 0 2px 0; }
@@ -75,6 +78,8 @@ struct NodeFilter {
     hide_mqtt: bool,
     only_fav: bool,
     show_ignored: bool,
+    only_direct: bool,
+    only_pos: bool,
 }
 
 #[derive(Default)]
@@ -100,6 +105,12 @@ struct State {
     reply_to: Option<u32>,
     /// Nodo cuyo rastro se dibuja en el mapa.
     track_of: Option<u32>,
+    /// Últimas estadísticas de la radio de tu nodo y cuándo llegaron.
+    local_stats: Option<(u32, protobufs::LocalStats)>,
+    /// Punto de partida de una medida de distancia en el mapa.
+    measure_from: Option<(f64, f64)>,
+    /// Última respuesta automática a cada nodo, para no repetirse.
+    auto_last: HashMap<u32, u32>,
 }
 
 impl State {
@@ -218,6 +229,8 @@ struct Widgets {
     wp_markers: shumate::MarkerLayer,
     track_layer: RefCell<Option<shumate::PathLayer>>,
     clear_track: gtk::Button,
+    measure_layer: RefCell<Option<shumate::PathLayer>>,
+    measure_label: gtk::Label,
     // Ajustes
     settings_nav: adw::NavigationView,
     settings_root: gtk::Box,
@@ -320,6 +333,12 @@ pub fn build(gapp: &adw::Application, cmd: UnboundedSender<Command>, ev: async_c
         .content(&toasts)
         .build();
 
+    if let Some((w, h, max)) = st.saved.prefs.window.filter(|w| w.0 > 300 && w.1 > 300) {
+        window.set_default_size(w, h);
+        if max {
+            window.maximize();
+        }
+    }
     let start_hidden = args_have("--oculta") || st.saved.prefs.start_hidden;
     let app = Rc::new(App {
         st: RefCell::new(st),
@@ -350,6 +369,8 @@ pub fn build(gapp: &adw::Application, cmd: UnboundedSender<Command>, ev: async_c
             wp_markers: map_ui.wp_markers,
             track_layer: RefCell::new(None),
             clear_track: map_ui.clear_track.clone(),
+            measure_layer: RefCell::new(None),
+            measure_label: map_ui.measure_label.clone(),
             settings_nav,
             settings_root,
             log_list: log_ui.list,
@@ -399,9 +420,30 @@ pub fn build(gapp: &adw::Application, cmd: UnboundedSender<Command>, ev: async_c
                 }
             }
         });
+        // Recordar el tamaño de la ventana.
+        let remember = {
+            let a = app.clone();
+            move |w: &adw::ApplicationWindow| {
+                let (wd, ht) = w.default_size();
+                let max = w.is_maximized();
+                let mut st = a.st.borrow_mut();
+                let old = st.saved.prefs.window.unwrap_or((wd, ht, false));
+                // Maximizada, se guarda el tamaño de antes para cuando se restaure.
+                st.saved.prefs.window = Some(if max { (old.0, old.1, true) } else { (wd, ht, false) });
+            }
+        };
+        let r = remember.clone();
+        app.w.window.connect_default_width_notify(move |w| r(w));
+        let r = remember.clone();
+        app.w.window.connect_default_height_notify(move |w| r(w));
+        app.w.window.connect_maximized_notify(move |w| remember(w));
+        let a = app.clone();
+        gapp.connect_shutdown(move |_| a.save());
+
         // Con bandeja, cerrar la ventana solo la esconde, como Telegram.
         let a = app.clone();
         app.w.window.connect_close_request(move |w| {
+            a.save();
             if a.tray_ok.get() {
                 w.set_visible(false);
                 glib::Propagation::Stop
@@ -418,6 +460,9 @@ pub fn build(gapp: &adw::Application, cmd: UnboundedSender<Command>, ev: async_c
     // Icono en la bandeja (no en las capturas de la demo).
     if !(store::is_demo() && args_have("--pagina")) {
         app.start_tray();
+    }
+    if app.st.borrow().saved.prefs.check_updates && !store::is_demo() {
+        app.check_updates();
     }
 
     // Eventos de la radio.
@@ -475,6 +520,38 @@ pub fn build(gapp: &adw::Application, cmd: UnboundedSender<Command>, ev: async_c
             } else if let Some(n) = p.strip_prefix("rastro:") {
                 if let Ok(n) = u32::from_str_radix(n.trim_start_matches('!'), 16) {
                     a.show_track(n);
+                }
+            } else if let Some(n) = p.strip_prefix("ruta:") {
+                // Pide un traceroute y dibuja la respuesta en el mapa.
+                if let Ok(n) = u32::from_str_radix(n.trim_start_matches('!'), 16) {
+                    a.send_cmd(Command::Traceroute(n));
+                    let a2 = a.clone();
+                    glib::timeout_add_local_once(std::time::Duration::from_millis(3000), move || {
+                        let t = a2.st.borrow().saved.traces.last().cloned();
+                        if let Some(t) = t {
+                            a2.show_trace_on_map(&t);
+                        }
+                    });
+                }
+            } else if p == "mapa-noche" {
+                map::set_night(&a.w.map, true);
+                a.w.stack.set_visible_child_name("mapa");
+            } else if p == "medida" {
+                // Mide de tu nodo al primero con posición, para las capturas.
+                let (me, other) = {
+                    let st = a.st.borrow();
+                    let other = st.nodes.values().filter(|n| n.num != st.my).find_map(|n| Some((n.lat?, n.lon?)));
+                    (st.my_pos(), other)
+                };
+                if let (Some(me), Some(o)) = (me, other) {
+                    a.draw_measure(me, o);
+                    a.fit_map(&[me, o]);
+                }
+            } else if p == "paquete" {
+                a.w.stack.set_visible_child_name("registro");
+                let pk = a.st.borrow().packets.back().cloned();
+                if let Some(pk) = pk {
+                    a.show_packet(&pk);
                 }
             } else {
                 a.w.stack.set_visible_child_name(&p);
@@ -641,6 +718,27 @@ impl App {
         self.w.toasts.add_toast(adw::Toast::new(&glib::markup_escape_text(text)));
     }
 
+    /// Mira en GitHub si hay una versión más nueva y, si la hay, lo avisa.
+    /// Usa GIO, así que no hace falta otra librería; si falla, no dice nada.
+    fn check_updates(self: &Rc<Self>) {
+        let a = self.clone();
+        let file = gio::File::for_uri("https://api.github.com/repos/FreeMEM/malla/releases/latest");
+        file.load_contents_async(gio::Cancellable::NONE, move |res| {
+            let Ok((bytes, _)) = res else { return };
+            let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return };
+            let Some(tag) = v.get("tag_name").and_then(|t| t.as_str()) else { return };
+            let url = v.get("html_url").and_then(|t| t.as_str()).unwrap_or("https://github.com/FreeMEM/malla/releases/latest").to_string();
+            if newer(tag.trim_start_matches('v'), env!("CARGO_PKG_VERSION")) {
+                let t = adw::Toast::builder().title(format!("Hay una versión nueva de Malla: {tag}")).button_label("Ver").timeout(0).build();
+                let w = a.w.window.clone();
+                t.connect_button_clicked(move |_| {
+                    gtk::UriLauncher::new(&url).launch(Some(&w), gio::Cancellable::NONE, |_| {});
+                });
+                a.w.toasts.add_toast(t);
+            }
+        });
+    }
+
     fn save(&self) {
         store::save(&mut self.st.borrow_mut().saved);
     }
@@ -700,6 +798,7 @@ impl App {
                     st.connecting = false;
                     st.connected = true;
                     st.saved.last_target = Some(t.clone());
+                    st.saved.add_recent(t.clone());
                     st.target = Some(t);
                 }
                 self.save();
@@ -833,6 +932,7 @@ impl App {
                 }
             }
             Event::Packet(p) => self.on_packet(p),
+            Event::LocalStats(m) => self.st.borrow_mut().local_stats = Some((now(), m)),
             Event::Info(s) | Event::Error(s) => self.toast(&s),
         }
     }
@@ -996,5 +1096,22 @@ impl App {
                 Err(e) => a.toast(&format!("No se pudo exportar: {e}")),
             }
         });
+    }
+}
+
+/// ¿Es la versión `a` (x.y.z) más nueva que `b`?
+fn newer(a: &str, b: &str) -> bool {
+    let p = |s: &str| s.split('.').map(|n| n.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>();
+    p(a) > p(b)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn versiones() {
+        assert!(super::newer("0.3.0", "0.2.1"));
+        assert!(super::newer("0.10.0", "0.9.9"));
+        assert!(!super::newer("0.2.1", "0.2.1"));
+        assert!(!super::newer("0.2.0", "0.2.1"));
     }
 }

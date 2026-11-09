@@ -8,12 +8,16 @@ pub(super) struct MapUi {
     pub markers: shumate::MarkerLayer,
     pub wp_markers: shumate::MarkerLayer,
     pub clear_track: gtk::Button,
+    pub measure_label: gtk::Label,
     pub extra: MapExtra,
 }
 
 pub(super) struct MapExtra {
     center: gtk::Button,
+    fit: gtk::Button,
     layer: gtk::DropDown,
+    night: gtk::ToggleButton,
+    search: gtk::SearchEntry,
 }
 
 /// (nombre, id, url de teselas, licencia, zoom máximo)
@@ -71,6 +75,11 @@ pub(super) fn build_page() -> MapUi {
     let layer = gtk::DropDown::from_strings(&names);
     layer.set_tooltip_text(Some("Tipo de mapa"));
     layer.add_css_class("mapbtn");
+    let fit = gtk::Button::builder().label("Todos").tooltip_text("Ver todos los nodos con posición").build();
+    fit.add_css_class("mapbtn");
+    let night = gtk::ToggleButton::builder().icon_name("weather-clear-night-symbolic").tooltip_text("Mapa oscuro").build();
+    night.add_css_class("mapbtn");
+    let search = gtk::SearchEntry::builder().placeholder_text("Buscar nodo o punto").width_chars(18).build();
     let clear_track = gtk::Button::builder().label("Quitar rastro").visible(false).build();
     clear_track.add_css_class("mapbtn");
     let tools = gtk::Box::builder()
@@ -83,7 +92,10 @@ pub(super) fn build_page() -> MapUi {
     tools.add_css_class("osd");
     tools.add_css_class("toolbar");
     tools.append(&center);
+    tools.append(&fit);
     tools.append(&layer);
+    tools.append(&night);
+    tools.append(&search);
     tools.append(&clear_track);
     let hint = gtk::Label::new(Some("Clic derecho en el mapa para añadir un punto"));
     hint.add_css_class("meta");
@@ -92,11 +104,22 @@ pub(super) fn build_page() -> MapUi {
     hint.set_valign(gtk::Align::End);
     hint.set_margin_bottom(36);
 
+    // Resultado de medir una distancia, arriba a la derecha.
+    let measure_label = gtk::Label::builder()
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Start)
+        .margin_top(72)
+        .visible(false)
+        .build();
+    measure_label.add_css_class("osd");
+    measure_label.add_css_class("measure");
+
     let root = gtk::Overlay::new();
     root.set_child(Some(&map));
     root.add_overlay(&tools);
     root.add_overlay(&hint);
-    MapUi { root, map, markers, wp_markers, clear_track, extra: MapExtra { center, layer } }
+    root.add_overlay(&measure_label);
+    MapUi { root, map, markers, wp_markers, clear_track, measure_label, extra: MapExtra { center, fit, layer, night, search } }
 }
 
 pub(super) fn connect_signals(app: &Rc<App>, x: &MapExtra) {
@@ -113,6 +136,16 @@ pub(super) fn connect_signals(app: &Rc<App>, x: &MapExtra) {
         }
     });
 
+    let a = app.clone();
+    x.fit.connect_clicked(move |_| {
+        let pts: Vec<(f64, f64)> = a.st.borrow().nodes.values().filter(|n| !n.ignored).filter_map(|n| Some((n.lat?, n.lon?))).collect();
+        if pts.is_empty() {
+            a.toast("Ningún nodo ha compartido su posición todavía");
+        } else {
+            a.fit_map(&pts);
+        }
+    });
+
     let saved = app.st.borrow().saved.prefs.map_source.clone();
     if let Some(i) = LAYERS.iter().position(|l| l.1 == saved) {
         x.layer.set_selected(i as u32);
@@ -120,6 +153,7 @@ pub(super) fn connect_signals(app: &Rc<App>, x: &MapExtra) {
             app.w.map.set_map_source(Some(&src));
         }
     }
+    let night = x.night.clone();
     let a = app.clone();
     x.layer.connect_selected_notify(move |d| {
         let i = d.selected() as usize;
@@ -127,8 +161,63 @@ pub(super) fn connect_signals(app: &Rc<App>, x: &MapExtra) {
             a.w.map.set_map_source(Some(&src));
             a.st.borrow_mut().saved.prefs.map_source = LAYERS[i].1.to_string();
             a.save();
+            // La capa base es nueva: hay que volver a oscurecerla.
+            set_night(&a.w.map, night.is_active());
         }
     });
+
+    let on = app.st.borrow().saved.prefs.map_night;
+    x.night.set_active(on);
+    set_night(&app.w.map, on);
+    let a = app.clone();
+    x.night.connect_toggled(move |b| {
+        set_night(&a.w.map, b.is_active());
+        a.st.borrow_mut().saved.prefs.map_night = b.is_active();
+        a.save();
+    });
+
+    let a = app.clone();
+    x.search.connect_activate(move |e| {
+        let q = e.text().trim().to_lowercase();
+        if q.is_empty() {
+            return;
+        }
+        let found = {
+            let st = a.st.borrow();
+            let node = st
+                .nodes
+                .values()
+                .filter(|n| n.lat.is_some())
+                .find(|n| n.long_name.to_lowercase().contains(&q) || n.short_name.to_lowercase().contains(&q) || Node::id_str(n.num).contains(&q))
+                .and_then(|n| Some((n.lat?, n.lon?)));
+            node.or_else(|| st.saved.waypoints.values().find(|w| w.name.to_lowercase().contains(&q)).map(|w| (w.lat, w.lon)))
+        };
+        match found {
+            Some((la, lo)) => a.show_on_map(la, lo),
+            None => a.toast("No encuentro ningún nodo con posición ni punto con ese nombre"),
+        }
+    });
+
+    // Clic izquierdo: termina una medida empezada desde el menú.
+    let a = app.clone();
+    let g = gtk::GestureClick::builder().button(1).build();
+    g.connect_released(move |g, n, x, y| {
+        let Some(from) = a.st.borrow().measure_from else { return };
+        if n != 1 {
+            return;
+        }
+        let Some(w) = g.widget() else { return };
+        let Some(vp) = a.w.map.viewport() else { return };
+        let to = vp.widget_coords_to_location(&w, x, y);
+        a.st.borrow_mut().measure_from = None;
+        a.draw_measure(from, to);
+    });
+    app.w.map.add_controller(g);
+
+    let a = app.clone();
+    let g = gtk::GestureClick::new();
+    g.connect_released(move |_, _, _, _| a.clear_measure());
+    app.w.measure_label.add_controller(g);
 
     let a = app.clone();
     app.w.clear_track.connect_clicked(move |b| {
@@ -162,6 +251,119 @@ impl App {
         }
     }
 
+    /// Encuadra el mapa para que se vean todos estos puntos.
+    pub(super) fn fit_map(&self, pts: &[(f64, f64)]) {
+        let Some(m) = self.w.map.map() else { return };
+        let (mut a0, mut a1, mut o0, mut o1) = (90.0f64, -90.0f64, 180.0f64, -180.0f64);
+        for (la, lo) in pts {
+            a0 = a0.min(*la);
+            a1 = a1.max(*la);
+            o0 = o0.min(*lo);
+            o1 = o1.max(*lo);
+        }
+        let (cla, clo) = ((a0 + a1) / 2.0, (o0 + o1) / 2.0);
+        let span = (a1 - a0).max((o1 - o0) * cla.to_radians().cos()).max(1e-4);
+        let zoom = ((360.0 / span).log2() - 1.5).clamp(3.0, 15.0);
+        self.w.stack.set_visible_child_name("mapa");
+        self.map_centered.set(true);
+        m.go_to_full(cla, clo, zoom);
+    }
+
+    /// Dibuja una línea sobre el mapa en la capa de rastros (rastro o ruta).
+    fn draw_line(&self, pts: &[(f64, f64)], what: &str) {
+        let Some(vp) = self.w.map.viewport() else { return };
+        let Some(m) = self.w.map.map() else { return };
+        if let Some(l) = self.w.track_layer.borrow_mut().take() {
+            m.remove_layer(&l);
+        }
+        let layer = shumate::PathLayer::new(&vp);
+        layer.set_stroke_color(Some(&gdk::RGBA::new(0.78, 0.27, 0.0, 0.9)));
+        layer.set_stroke_width(4.0);
+        for (la, lo) in pts {
+            layer.add_node(&shumate::Coordinate::new_full(*la, *lo));
+        }
+        m.insert_layer_behind(&layer, Some(&self.w.wp_markers));
+        *self.w.track_layer.borrow_mut() = Some(layer);
+        self.w.clear_track.set_label(&format!("Quitar {what}"));
+        self.w.clear_track.set_visible(true);
+        self.fit_map(pts);
+    }
+
+    /// Dibuja en el mapa la ruta de un traceroute, con los nodos que tienen posición.
+    pub(super) fn show_trace_on_map(&self, t: &Trace) {
+        let (pts, missing) = {
+            let st = self.st.borrow();
+            let mut nodes = vec![st.my];
+            nodes.extend(t.towards.iter().copied());
+            nodes.push(t.target);
+            if t.has_back {
+                nodes.extend(t.back.iter().copied());
+                nodes.push(st.my);
+            }
+            let mut pts = vec![];
+            let mut missing = vec![];
+            for n in nodes {
+                match st.nodes.get(&n).and_then(|x| Some((x.lat?, x.lon?))) {
+                    Some(p) => pts.push(p),
+                    None => {
+                        let s = st.short_of(n);
+                        if !missing.contains(&s) {
+                            missing.push(s);
+                        }
+                    }
+                }
+            }
+            (pts, missing)
+        };
+        if pts.len() < 2 {
+            self.toast("No hay posiciones suficientes para dibujar esta ruta");
+            return;
+        }
+        // Cierra la ficha y demás ventanas que tapen el mapa.
+        for _ in 0..5 {
+            match self.w.window.visible_dialog() {
+                Some(d) => {
+                    d.force_close();
+                }
+                None => break,
+            }
+        }
+        self.st.borrow_mut().track_of = None;
+        self.draw_line(&pts, "ruta");
+        if !missing.is_empty() {
+            self.toast(&format!("Sin posición, no salen en la línea: {}", missing.join(", ")));
+        }
+    }
+
+    pub(super) fn draw_measure(&self, from: (f64, f64), to: (f64, f64)) {
+        let Some(vp) = self.w.map.viewport() else { return };
+        let Some(m) = self.w.map.map() else { return };
+        if let Some(l) = self.w.measure_layer.borrow_mut().take() {
+            m.remove_layer(&l);
+        }
+        let layer = shumate::PathLayer::new(&vp);
+        layer.set_stroke_color(Some(&gdk::RGBA::new(0.11, 0.44, 0.85, 0.95)));
+        layer.set_stroke_width(3.0);
+        layer.add_node(&shumate::Coordinate::new_full(from.0, from.1));
+        layer.add_node(&shumate::Coordinate::new_full(to.0, to.1));
+        m.add_layer(&layer);
+        *self.w.measure_layer.borrow_mut() = Some(layer);
+        let (d, b) = distance_bearing(from, to);
+        self.w.measure_label.set_text(&format!("{} al {} ({b:.0}°)  ✕", fmt_distance(d), compass(b)));
+        self.w.measure_label.set_tooltip_text(Some("Pulsa para quitar la medida"));
+        self.w.measure_label.set_visible(true);
+    }
+
+    fn clear_measure(&self) {
+        self.st.borrow_mut().measure_from = None;
+        if let Some(l) = self.w.measure_layer.borrow_mut().take() {
+            if let Some(m) = self.w.map.map() {
+                m.remove_layer(&l);
+            }
+        }
+        self.w.measure_label.set_visible(false);
+    }
+
     pub(super) fn show_node_on_map(&self, num: u32) {
         let pos = self.st.borrow().nodes.get(&num).and_then(|n| Some((n.lat?, n.lon?)));
         if let Some((la, lo)) = pos {
@@ -176,35 +378,9 @@ impl App {
             self.toast("Aún no hay suficientes posiciones guardadas de este nodo para dibujar un rastro.");
             return;
         }
-        let Some(vp) = self.w.map.viewport() else { return };
-        let Some(m) = self.w.map.map() else { return };
-        if let Some(l) = self.w.track_layer.borrow_mut().take() {
-            m.remove_layer(&l);
-        }
-        let layer = shumate::PathLayer::new(&vp);
-        layer.set_stroke_color(Some(&gdk::RGBA::new(0.78, 0.27, 0.0, 0.9)));
-        layer.set_stroke_width(4.0);
-        for (_, la, lo) in &pts {
-            layer.add_node(&shumate::Coordinate::new_full(*la, *lo));
-        }
-        m.insert_layer_behind(&layer, Some(&self.w.wp_markers));
-        *self.w.track_layer.borrow_mut() = Some(layer);
+        let line: Vec<(f64, f64)> = pts.iter().map(|p| (p.1, p.2)).collect();
+        self.draw_line(&line, "rastro");
         self.st.borrow_mut().track_of = Some(num);
-        self.w.clear_track.set_visible(true);
-        // Encuadra todo el rastro.
-        let (mut a0, mut a1, mut o0, mut o1) = (90.0f64, -90.0f64, 180.0f64, -180.0f64);
-        for (_, la, lo) in &pts {
-            a0 = a0.min(*la);
-            a1 = a1.max(*la);
-            o0 = o0.min(*lo);
-            o1 = o1.max(*lo);
-        }
-        let (cla, clo) = ((a0 + a1) / 2.0, (o0 + o1) / 2.0);
-        let span = (a1 - a0).max((o1 - o0) * cla.to_radians().cos()).max(1e-4);
-        let zoom = ((360.0 / span).log2() - 1.5).clamp(3.0, 17.0);
-        self.w.stack.set_visible_child_name("mapa");
-        self.map_centered.set(true);
-        m.go_to_full(cla, clo, zoom);
         self.toast(&format!("Rastro de {} posiciones", pts.len()));
     }
 
@@ -226,9 +402,21 @@ impl App {
         copy.add_css_class("flat");
         let fixed = gtk::Button::with_label("Fijar aquí la posición de mi nodo…");
         fixed.add_css_class("flat");
-        bx.append(&add);
-        bx.append(&copy);
-        bx.append(&fixed);
+        let measure = gtk::Button::with_label("Medir distancia desde aquí");
+        measure.add_css_class("flat");
+        for b in [&add, &copy, &measure, &fixed] {
+            b.child().and_downcast::<gtk::Label>().inspect(|l| l.set_xalign(0.0));
+            bx.append(b);
+        }
+        let a = self.clone();
+        let p = pop.clone();
+        measure.connect_clicked(move |_| {
+            p.popdown();
+            a.clear_measure();
+            a.st.borrow_mut().measure_from = Some((la, lo));
+            a.w.measure_label.set_text("Pulsa en el mapa el otro punto");
+            a.w.measure_label.set_visible(true);
+        });
         pop.set_child(Some(&bx));
         let a = self.clone();
         let p = pop.clone();
@@ -584,6 +772,19 @@ impl App {
                 v.set_zoom_level(z);
             }
             self.map_centered.set(true);
+        }
+    }
+}
+
+/// Oscurece la capa base del mapa (invierte los colores de las teselas).
+/// Los marcadores y líneas son otras capas y no cambian.
+pub(super) fn set_night(map: &shumate::SimpleMap, on: bool) {
+    let Some(m) = map.map() else { return };
+    if let Some(base) = m.first_child() {
+        if on {
+            base.add_css_class("noche");
+        } else {
+            base.remove_css_class("noche");
         }
     }
 }

@@ -301,6 +301,9 @@ impl App {
             }
         }
         self.rebuild_convs();
+        if incoming && !m.emoji {
+            self.maybe_auto_reply(&m);
+        }
         let capturas = store::is_demo() && args_have("--pagina");
         if incoming && notify && !capturas {
             let body = if m.emoji { format!("Ha reaccionado con {}", m.text) } else { m.text.clone() };

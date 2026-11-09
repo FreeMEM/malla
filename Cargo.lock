@@ -988,7 +988,7 @@ dependencies = [
 
 [[package]]
 name = "malla"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "base64",

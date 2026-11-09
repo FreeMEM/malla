@@ -16,6 +16,8 @@ pub(super) struct NodesExtra {
     mqtt: gtk::CheckButton,
     fav: gtk::CheckButton,
     ignored: gtk::CheckButton,
+    direct: gtk::CheckButton,
+    pos: gtk::CheckButton,
 }
 
 const SORTS: [(&str, NodeSort); 5] = [
@@ -27,7 +29,7 @@ const SORTS: [(&str, NodeSort); 5] = [
 ];
 
 pub(super) fn build_page() -> NodesUi {
-    let search = gtk::SearchEntry::builder().placeholder_text("Buscar por nombre o id").hexpand(true).build();
+    let search = gtk::SearchEntry::builder().placeholder_text("Buscar por nombre, id o número").hexpand(true).build();
     let names: Vec<&str> = SORTS.iter().map(|s| s.0).collect();
     let sort = gtk::DropDown::from_strings(&names);
     sort.set_tooltip_text(Some("Ordenar por"));
@@ -36,8 +38,10 @@ pub(super) fn build_page() -> NodesUi {
     let mqtt = gtk::CheckButton::with_label("Ocultar los que llegan por MQTT");
     let fav = gtk::CheckButton::with_label("Solo favoritos");
     let ignored = gtk::CheckButton::with_label("Mostrar ignorados");
+    let direct = gtk::CheckButton::with_label("Solo los que oigo directamente (0 saltos)");
+    let pos = gtk::CheckButton::with_label("Solo los que tienen posición");
     let fbox = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(4).build();
-    for c in [&active, &mqtt, &fav, &ignored] {
+    for c in [&active, &direct, &pos, &mqtt, &fav, &ignored] {
         fbox.append(c);
     }
     let fpop = gtk::Popover::builder().child(&fbox).build();
@@ -67,7 +71,7 @@ pub(super) fn build_page() -> NodesUi {
         .child(&adw::Clamp::builder().maximum_size(980).child(&bx).build())
         .hscrollbar_policy(gtk::PolicyType::Never)
         .build();
-    NodesUi { root, list, count, extra: NodesExtra { search, sort, active, mqtt, fav, ignored } }
+    NodesUi { root, list, count, extra: NodesExtra { search, sort, active, mqtt, fav, ignored, direct, pos } }
 }
 
 pub(super) fn connect_signals(app: &Rc<App>, x: &NodesExtra) {
@@ -81,8 +85,10 @@ pub(super) fn connect_signals(app: &Rc<App>, x: &NodesExtra) {
         a.st.borrow_mut().nf.sort = SORTS.get(d.selected() as usize).map(|s| s.1).unwrap_or_default();
         a.rebuild_nodes();
     });
-    let pairs: [(&gtk::CheckButton, fn(&mut NodeFilter, bool)); 4] = [
+    let pairs: [(&gtk::CheckButton, fn(&mut NodeFilter, bool)); 6] = [
         (&x.active, |f, v| f.only_active = v),
+        (&x.direct, |f, v| f.only_direct = v),
+        (&x.pos, |f, v| f.only_pos = v),
         (&x.mqtt, |f, v| f.hide_mqtt = v),
         (&x.fav, |f, v| f.only_fav = v),
         (&x.ignored, |f, v| f.show_ignored = v),
@@ -116,7 +122,10 @@ impl App {
                 (f.text.is_empty()
                     || n.long_name.to_lowercase().contains(&f.text)
                     || n.short_name.to_lowercase().contains(&f.text)
-                    || Node::id_str(n.num).contains(&f.text))
+                    || Node::id_str(n.num).contains(&f.text)
+                    || n.num.to_string() == f.text)
+                    && (!f.only_direct || n.num == my || (n.hops_away == Some(0) && !n.via_mqtt))
+                    && (!f.only_pos || n.lat.is_some())
                     && (!f.only_active || n.num == my || t.saturating_sub(n.last_heard) < 7200)
                     && (!f.hide_mqtt || !n.via_mqtt)
                     && (!f.only_fav || n.favorite || n.num == my)
