@@ -305,7 +305,9 @@ impl App {
             self.maybe_auto_reply(&m);
         }
         let capturas = store::is_demo() && args_have("--pagina");
-        if incoming && notify && !capturas {
+        // En macOS no hay bus D-Bus: gio::Notification aborta el proceso (SIGTRAP).
+        let hay_dbus = cfg!(not(target_os = "macos"));
+        if incoming && notify && !capturas && hay_dbus {
             let body = if m.emoji { format!("Ha reaccionado con {}", m.text) } else { m.text.clone() };
             let n = gio::Notification::new(&format!("{sender} · {title}"));
             n.set_body(Some(&body));

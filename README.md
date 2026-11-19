@@ -207,6 +207,19 @@ con [rustup](https://rustup.rs).
     cargo build --release
     ./instalar.sh      # programa, icono y lanzador en ~/.local
 
+### macOS (Apple Silicon o Intel)
+
+Funciona compilándolo desde el código. Necesitas [Homebrew](https://brew.sh) y
+[rustup](https://rustup.rs):
+
+    brew install gtk4 libadwaita libshumate pkgconf
+    cargo build --release
+    ./empaquetar/macos.sh      # crea dist/Malla.app
+
+Abre `dist/Malla.app` (doble clic o `open dist/Malla.app`). La primera vez macOS pedirá
+permiso de Bluetooth. Si lo ejecutas desde una terminal, el permiso se asocia a la terminal;
+con el `.app` se asocia a Malla. En macOS no hay notificaciones de escritorio.
+
 ## Uso
 
 Abre Malla y pulsa **Conectar**.
