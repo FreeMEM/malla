@@ -241,9 +241,11 @@ impl App {
             b.add_css_class("flat");
             b.child().and_downcast::<gtk::Label>().inspect(|l| l.set_xalign(0.0));
             let a = self.clone();
-            let p = pop.clone();
+            let p = pop.downgrade();
             b.connect_clicked(move |_| {
-                p.popdown();
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
                 f(&a);
             });
             bx.append(&b);
