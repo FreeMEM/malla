@@ -91,10 +91,11 @@ impl App {
         let rebuild: Rc<RefCell<Option<Box<dyn Fn()>>>> = Rc::new(RefCell::new(None));
         {
             let a = self.clone();
-            let page = page.clone();
+            let page = page.downgrade();
             let holder = holder.clone();
-            let rebuild2 = rebuild.clone();
+            let rebuild2 = Rc::downgrade(&rebuild);
             *rebuild.borrow_mut() = Some(Box::new(move || {
+                let Some(page) = page.upgrade() else { return };
                 for g in holder.borrow_mut().drain(..) {
                     page.remove(&g);
                 }
@@ -141,12 +142,13 @@ impl App {
                             }
                         }
                         aa.save();
-                        let rb = rb.clone();
-                        glib::idle_add_local_once(move || {
-                            if let Some(f) = rb.borrow().as_ref() {
-                                f();
-                            }
-                        });
+                        if let Some(rb) = rb.upgrade() {
+                            glib::idle_add_local_once(move || {
+                                if let Some(f) = rb.borrow().as_ref() {
+                                    f();
+                                }
+                            });
+                        }
                     });
                     page.add(&g);
                     holder.borrow_mut().push(g);

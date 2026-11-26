@@ -686,18 +686,21 @@ impl App {
             .build();
         let rows: Rc<RefCell<Vec<adw::EntryRow>>> = Rc::new(RefCell::new(vec![]));
         let add_row = {
-            let g = g.clone();
-            let rows = rows.clone();
+            let g = g.downgrade();
+            let rows = Rc::downgrade(&rows);
             move |text: &str| {
+                let (Some(g), Some(rows)) = (g.upgrade(), rows.upgrade()) else { return };
                 let r = adw::EntryRow::builder().title("Frase").text(text).build();
                 let del = gtk::Button::builder().icon_name("user-trash-symbolic").valign(gtk::Align::Center).build();
                 del.add_css_class("flat");
-                let gg = g.clone();
-                let rr = r.clone();
-                let rows2 = rows.clone();
+                let gg = g.downgrade();
+                let rr = r.downgrade();
+                let rows2 = Rc::downgrade(&rows);
                 del.connect_clicked(move |_| {
-                    gg.remove(&rr);
-                    rows2.borrow_mut().retain(|x| x != &rr);
+                    if let (Some(gg), Some(rr), Some(rows2)) = (gg.upgrade(), rr.upgrade(), rows2.upgrade()) {
+                        gg.remove(&rr);
+                        rows2.borrow_mut().retain(|x| x != &rr);
+                    }
                 });
                 r.add_suffix(&del);
                 g.add(&r);

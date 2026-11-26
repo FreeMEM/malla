@@ -157,20 +157,18 @@ impl App {
             let fill = {
                 let holder = holder.clone();
                 let samples = samples.clone();
-                let period = period.clone();
-                let table = table.clone();
-                move || {
+                move |selected: u32, table_active: bool| {
                     while let Some(c) = holder.first_child() {
                         holder.remove(&c);
                     }
-                    let since = PERIODS.get(period.selected() as usize).map(|p| p.1).unwrap_or(0);
+                    let since = PERIODS.get(selected as usize).map(|p| p.1).unwrap_or(0);
                     let from = if since == 0 { 0 } else { now().saturating_sub(since) };
                     let sel: Vec<Sample> = samples.iter().filter(|s| s.t >= from).cloned().collect();
                     let w: gtk::Widget = if sel.is_empty() {
                         let l = gtk::Label::builder().label("No hay datos en este periodo.").margin_top(12).margin_bottom(12).build();
                         l.add_css_class("dim-label");
                         l.upcast()
-                    } else if table.is_active() {
+                    } else if table_active {
                         samples_table(&sel).upcast()
                     } else {
                         let cbox = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(12).build();
@@ -182,11 +180,21 @@ impl App {
                     holder.append(&w);
                 }
             };
-            fill();
+            fill(period.selected(), table.is_active());
             let f = std::rc::Rc::new(fill);
             let f2 = f.clone();
-            period.connect_selected_notify(move |_| f2());
-            table.connect_toggled(move |_| f());
+            let table_weak = table.downgrade();
+            period.connect_selected_notify(move |period| {
+                if let Some(table) = table_weak.upgrade() {
+                    f2(period.selected(), table.is_active());
+                }
+            });
+            let period_weak = period.downgrade();
+            table.connect_toggled(move |table| {
+                if let Some(period) = period_weak.upgrade() {
+                    f(period.selected(), table.is_active());
+                }
+            });
             g.add(&holder);
         }
         page.add(&g);
@@ -342,10 +350,12 @@ impl App {
             .child(&tv)
             .build();
         let a = self.clone();
-        let d = dialog.clone();
+        let d = dialog.downgrade();
         let tt = t.clone();
         on_map.connect_clicked(move |_| {
-            d.force_close();
+            if let Some(d) = d.upgrade() {
+                d.force_close();
+            }
             a.show_trace_on_map(&tt);
         });
         dialog.present(Some(&self.w.window));

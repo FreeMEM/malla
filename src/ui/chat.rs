@@ -203,9 +203,11 @@ pub(super) fn connect_signals(app: &Rc<App>, x: &ChatExtra) {
     pop.set_child(Some(&bx));
     x.conv_menu.set_popover(Some(&pop));
     let a = app.clone();
-    let p = pop.clone();
+    let p = pop.downgrade();
     read.connect_clicked(move |_| {
-        p.popdown();
+        if let Some(p) = p.upgrade() {
+            p.popdown();
+        }
         let c = a.st.borrow().current;
         if let Some(c) = c {
             a.st.borrow_mut().unread.remove(&c);
@@ -213,17 +215,21 @@ pub(super) fn connect_signals(app: &Rc<App>, x: &ChatExtra) {
         }
     });
     let a = app.clone();
-    let p = pop.clone();
+    let p = pop.downgrade();
     node.connect_clicked(move |_| {
-        p.popdown();
+        if let Some(p) = p.upgrade() {
+            p.popdown();
+        }
         if let Some(Conv::Direct(n)) = a.st.borrow().current {
             a.open_node_detail(n);
         }
     });
     let a = app.clone();
-    let p = pop.clone();
+    let p = pop.downgrade();
     clear.connect_clicked(move |_| {
-        p.popdown();
+        if let Some(p) = p.upgrade() {
+            p.popdown();
+        }
         let Some(c) = a.st.borrow().current else { return };
         let title = a.st.borrow().conv_title(c);
         let a2 = a.clone();
@@ -693,14 +699,22 @@ impl App {
         let a = self.clone();
         let mm = m.clone();
         let g = gtk::GestureClick::builder().button(3).build();
-        let bb = bubble.clone();
-        g.connect_pressed(move |_, _, _, _| a.message_menu(&bb, &mm));
+        let bb = bubble.downgrade();
+        g.connect_pressed(move |_, _, _, _| {
+            if let Some(bb) = bb.upgrade() {
+                a.message_menu(&bb, &mm);
+            }
+        });
         bubble.add_controller(g);
         let a = self.clone();
         let mm = m.clone();
         let lp = gtk::GestureLongPress::new();
-        let bb = bubble.clone();
-        lp.connect_pressed(move |_, _, _| a.message_menu(&bb, &mm));
+        let bb = bubble.downgrade();
+        lp.connect_pressed(move |_, _, _| {
+            if let Some(bb) = bb.upgrade() {
+                a.message_menu(&bb, &mm);
+            }
+        });
         bubble.add_controller(lp);
         bubble.set_tooltip_text(Some("Clic derecho: responder, reaccionar, copiar…"));
 
@@ -723,9 +737,11 @@ impl App {
             b.add_css_class("flat");
             let a = self.clone();
             let mm = m.clone();
-            let p = pop.clone();
+            let p = pop.downgrade();
             b.connect_clicked(move |_| {
-                p.popdown();
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
                 a.send_reaction(&mm, e);
             });
             row.append(&b);
@@ -736,9 +752,11 @@ impl App {
         {
             let a = self.clone();
             let mm = m.clone();
-            let p = pop.clone();
+            let p = pop.downgrade();
             more_chooser.connect_emoji_picked(move |_, e| {
-                p.popdown();
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
                 a.send_reaction(&mm, e);
             });
         }
@@ -761,54 +779,66 @@ impl App {
         let info = (!mine).then(|| item("Ver ficha del autor"));
         let del = item("Borrar de este equipo");
 
-        let p = pop.clone();
+        let p = pop.downgrade();
         let a = self.clone();
         let id = m.id;
         reply.connect_clicked(move |_| {
-            p.popdown();
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
             a.set_reply(Some(id));
         });
-        let p = pop.clone();
+        let p = pop.downgrade();
         let text = m.text.clone();
         let parent_w = parent.clone();
         copy.connect_clicked(move |_| {
-            p.popdown();
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
             parent_w.clipboard().set_text(&text);
         });
         if let Some(b) = retry {
-            let p = pop.clone();
+            let p = pop.downgrade();
             let a = self.clone();
             let mm = m.clone();
             b.connect_clicked(move |_| {
-                p.popdown();
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
                 a.st.borrow_mut().saved.messages.retain(|x| !(x.id == mm.id && x.from == mm.from));
                 a.send_cmd(Command::SendText { conv: mm.conv, text: mm.text.clone(), reply_id: mm.reply_id, emoji: false });
                 a.rebuild_messages();
             });
         }
         if let Some(b) = dm {
-            let p = pop.clone();
+            let p = pop.downgrade();
             let a = self.clone();
             let from = m.from;
             b.connect_clicked(move |_| {
-                p.popdown();
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
                 a.open_dm(from);
             });
         }
         if let Some(b) = info {
-            let p = pop.clone();
+            let p = pop.downgrade();
             let a = self.clone();
             let from = m.from;
             b.connect_clicked(move |_| {
-                p.popdown();
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
                 a.open_node_detail(from);
             });
         }
-        let p = pop.clone();
+        let p = pop.downgrade();
         let a = self.clone();
         let mm = m.clone();
         del.connect_clicked(move |_| {
-            p.popdown();
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
             a.st.borrow_mut().saved.messages.retain(|x| !(x.id == mm.id && x.from == mm.from && x.conv == mm.conv));
             a.save();
             a.rebuild_messages();

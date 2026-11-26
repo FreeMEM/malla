@@ -409,9 +409,11 @@ impl App {
             bx.append(b);
         }
         let a = self.clone();
-        let p = pop.clone();
+        let p = pop.downgrade();
         measure.connect_clicked(move |_| {
-            p.popdown();
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
             a.clear_measure();
             a.st.borrow_mut().measure_from = Some((la, lo));
             a.w.measure_label.set_text("Pulsa en el mapa el otro punto");
@@ -419,21 +421,27 @@ impl App {
         });
         pop.set_child(Some(&bx));
         let a = self.clone();
-        let p = pop.clone();
+        let p = pop.downgrade();
         add.connect_clicked(move |_| {
-            p.popdown();
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
             a.waypoint_dialog(la, lo, None);
         });
-        let p = pop.clone();
+        let p = pop.downgrade();
         let ww = w.clone();
         copy.connect_clicked(move |_| {
-            p.popdown();
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
             ww.clipboard().set_text(&format!("{la:.6}, {lo:.6}"));
         });
         let a = self.clone();
-        let p = pop.clone();
+        let p = pop.downgrade();
         fixed.connect_clicked(move |_| {
-            p.popdown();
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
             let a2 = a.clone();
             a.confirm(
                 "¿Fijar la posición del nodo?",
@@ -495,7 +503,7 @@ impl App {
             .child(&tv)
             .build();
         let a = self.clone();
-        let d = dialog.clone();
+        let d = dialog.downgrade();
         let id = existing.as_ref().map(|w| w.id).unwrap_or_else(|| meshtastic::utils::generate_rand_id::<u32>());
         send.connect_clicked(move |_| {
             let n = name.text().trim().to_string();
@@ -539,7 +547,9 @@ impl App {
             );
             a.save();
             a.rebuild_waypoints();
-            d.close();
+            if let Some(d) = d.upgrade() {
+                d.close();
+            }
         });
         dialog.present(Some(&self.w.window));
     }
@@ -611,16 +621,20 @@ impl App {
                 bx.append(&row);
                 let a = self.clone();
                 let ww = w.clone();
-                let p = pop.clone();
+                let p = pop.downgrade();
                 edit.connect_clicked(move |_| {
-                    p.popdown();
+                    if let Some(p) = p.upgrade() {
+                        p.popdown();
+                    }
                     a.waypoint_dialog(ww.lat, ww.lon, Some(ww.clone()));
                 });
                 let a = self.clone();
                 let ww = w.clone();
-                let p = pop.clone();
+                let p = pop.downgrade();
                 del.connect_clicked(move |_| {
-                    p.popdown();
+                    if let Some(p) = p.upgrade() {
+                        p.popdown();
+                    }
                     a.delete_waypoint(&ww);
                 });
             }
@@ -703,17 +717,21 @@ impl App {
             row.append(&ficha);
             let a = self.clone();
             let num_c = *num;
-            let p = popover.clone();
+            let p = popover.downgrade();
             ficha.connect_clicked(move |_| {
-                p.popdown();
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
                 a.open_node_detail(num_c);
             });
             if *num != my {
                 let b = gtk::Button::with_label("Mensaje");
                 let a = self.clone();
-                let p = popover.clone();
+                let p = popover.downgrade();
                 b.connect_clicked(move |_| {
-                    p.popdown();
+                    if let Some(p) = p.upgrade() {
+                        p.popdown();
+                    }
                     a.open_dm(num_c);
                 });
                 row.append(&b);
@@ -721,9 +739,11 @@ impl App {
             if st.saved.tracks.get(num).map(|t| t.len() > 1).unwrap_or(false) {
                 let b = gtk::Button::with_label("Rastro");
                 let a = self.clone();
-                let p = popover.clone();
+                let p = popover.downgrade();
                 b.connect_clicked(move |_| {
-                    p.popdown();
+                    if let Some(p) = p.upgrade() {
+                        p.popdown();
+                    }
                     a.show_track(num_c);
                 });
                 row.append(&b);
